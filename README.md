@@ -19,11 +19,11 @@
 
 ## 🛠️ 安裝與設定
 
-### 1. 克隆專案
+### 1. 開啟專案
 
 ```bash
-git clone <your-github-repo-url>
-cd echochat-app
+# 使用 Xcode 開啟專案
+open "echochat app.xcodeproj"
 ```
 
 ### 2. 安裝依賴
@@ -66,46 +66,6 @@ open "echochat app.xcodeproj"
 xcodebuild -project "echochat app.xcodeproj" -scheme "echochat app" -destination "platform=iOS Simulator,name=iPhone 15" build
 ```
 
-## 🔄 自動同步系統
-
-專案已設定自動同步到 GitHub 的功能：
-
-### GitHub Actions
-
-- 自動建置和測試
-- 支援 main 和 develop 分支
-- 建置結果會上傳為 artifacts
-
-### 自動同步腳本
-
-#### 手動同步
-
-```bash
-# 使用預設提交訊息
-./scripts/auto-sync.sh
-
-# 使用自訂提交訊息
-./scripts/auto-sync.sh "修復登入問題"
-```
-
-#### Xcode 自動同步
-
-1. 在 Xcode 中開啟專案
-2. 選擇專案 → Build Phases
-3. 點擊 "+" → New Run Script Phase
-4. 設定腳本路徑：`${SRCROOT}/scripts/xcode-sync.sh`
-5. 確保在 "Copy Bundle Resources" 之後執行
-
-### 設定 GitHub 遠端倉庫
-
-```bash
-# 添加遠端倉庫
-git remote add origin <your-github-repo-url>
-
-# 推送到 GitHub
-git push -u origin main
-```
-
 ## 📁 專案結構
 
 ```
@@ -129,12 +89,12 @@ echochat-app/
 │   │   ├── ChatView.swift
 │   │   └── ...
 │   └── echochat_appApp.swift     # 應用程式入口
-├── scripts/                      # 自動化腳本
-│   ├── auto-sync.sh             # 自動同步腳本
-│   └── xcode-sync.sh            # Xcode 建置後腳本
-├── .github/workflows/            # GitHub Actions
-│   └── ios.yml                  # iOS 建置工作流程
-├── .gitignore                   # Git 忽略檔案
+├── echochat appTests/            # 單元測試
+├── echochat appUITests/          # UI 測試
+├── API_PROGRESS_FEATURE.md       # API 功能說明
+├── GOOGLE_SETUP.md              # Google 設定指南
+├── GOOGLE_SIGNIN_SETUP.md       # Google 登入設定
+├── SYSTEM_SETTINGS_GUIDE.md     # 系統設定指南
 └── README.md                    # 專案說明
 ```
 
@@ -148,32 +108,9 @@ xcodebuild -project "echochat app.xcodeproj" -scheme "echochat app" -destination
 xcodebuild -project "echochat app.xcodeproj" -scheme "echochat app" -destination "platform=iOS Simulator,name=iPhone 15" test -only-testing:echochat_appUITests
 ```
 
-## 📋 開發工作流程
-
-1. **開發新功能**
-   ```bash
-   git checkout -b feature/new-feature
-   # 進行開發...
-   ./scripts/auto-sync.sh "新增功能: 描述"
-   ```
-
-2. **修復問題**
-   ```bash
-   git checkout -b fix/bug-description
-   # 修復問題...
-   ./scripts/auto-sync.sh "修復問題: 描述"
-   ```
-
-3. **合併到主分支**
-   ```bash
-   git checkout main
-   git merge feature/new-feature
-   ./scripts/auto-sync.sh "合併功能分支"
-   ```
-
 ## 🔐 安全性
 
-- `GoogleService-Info.plist` 已加入 `.gitignore`
+- `GoogleService-Info.plist` 包含敏感資訊，請妥善保管
 - 敏感資訊使用環境變數或安全儲存
 - 所有 API 金鑰都經過加密處理
 
@@ -188,8 +125,8 @@ xcodebuild -project "echochat app.xcodeproj" -scheme "echochat app" -destination
 ## 📞 支援
 
 如有問題，請：
-1. 查看 [Issues](../../issues)
-2. 參考設定文件
+1. 查看設定文件
+2. 檢查系統需求
 3. 聯繫開發團隊
 
 ---
