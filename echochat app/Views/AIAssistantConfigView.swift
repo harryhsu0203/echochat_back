@@ -1,0 +1,1080 @@
+//
+//  AIAssistantConfigView.swift
+//  echochat app
+//
+//  Created by AI Assistant on 2025/1/27.
+//
+
+import SwiftUI
+import SwiftData
+
+struct AIAssistantConfigView: View {
+    @Environment(\.modelContext) private var modelContext
+    
+    // 基本設定
+    @AppStorage("selectedAIModel") private var selectedAIModel = "客服專家"
+    @AppStorage("maxTokens") private var maxTokens = 1000
+    @AppStorage("temperature") private var temperature = 0.7
+    @AppStorage("systemPrompt") private var systemPrompt = "你是一個專業的客服代表，請用友善、專業的態度回答客戶問題。"
+    
+    // AI助理個性化設定
+    @AppStorage("aiName") private var aiName = "EchoChat 助理"
+    @AppStorage("aiPersonality") private var aiPersonality = "友善、專業、耐心"
+    @AppStorage("aiSpecialties") private var aiSpecialties = "產品諮詢、技術支援、訂單處理"
+    @AppStorage("aiResponseStyle") private var aiResponseStyle = "正式"
+    @AppStorage("aiLanguage") private var aiLanguage = "繁體中文"
+    @AppStorage("aiAvatar") private var aiAvatar = "robot"
+    
+    // 進階設定
+    @AppStorage("maxContextLength") private var maxContextLength = 10
+    @AppStorage("enableResponseFiltering") private var enableResponseFiltering = true
+    @AppStorage("enableSentimentAnalysis") private var enableSentimentAnalysis = false
+    @AppStorage("enableAutoApproval") private var enableAutoApproval = false
+    @AppStorage("approvalThreshold") private var approvalThreshold = 0.8
+    
+    // 狀態管理
+    @State private var selectedTab: ConfigTab = .basic
+    @State private var showingPreview = false
+    @State private var showingTestResult = false
+    @State private var testResult = ""
+    @State private var isLoading = false
+    @State private var showingTemplatePicker = false
+    @State private var showingCustomInstructions = false
+    @State private var customInstructions = ""
+    
+    enum ConfigTab: String, CaseIterable {
+        case basic = "基本設定"
+        case personality = "個性設定"
+        case advanced = "進階設定"
+        case templates = "回應模板"
+        case test = "測試連線"
+        
+        var icon: String {
+            switch self {
+            case .basic:
+                return "gear"
+            case .personality:
+                return "person.circle"
+            case .advanced:
+                return "slider.horizontal.3"
+            case .templates:
+                return "text.bubble"
+            case .test:
+                return "network"
+            }
+        }
+        
+        var color: Color {
+            switch self {
+            case .basic:
+                return .blue
+            case .personality:
+                return .green
+            case .advanced:
+                return .orange
+            case .templates:
+                return .purple
+            case .test:
+                return .red
+            }
+        }
+    }
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // 頂部標題和AI助理預覽
+            VStack(spacing: 16) {
+                // 頁面標題
+                HStack {
+                    Text("AI助理配置")
+                        .font(.largeTitle)
+                        .fontWeight(.bold)
+                        .foregroundColor(Color.primaryText)
+                    
+                    Spacer()
+                    
+                    // 保存按鈕
+                    Button("保存") {
+                        saveSettings()
+                    }
+                    .font(.subheadline)
+                    .foregroundColor(Color.warmAccent)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.blue.opacity(0.1))
+                    .cornerRadius(8)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                
+                // AI助理預覽卡片
+                AIAssistantPreviewCard(
+                    name: aiName,
+                    avatar: aiAvatar,
+                    personality: aiPersonality,
+                    specialties: aiSpecialties
+                )
+                
+                // 功能標籤按鈕
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(ConfigTab.allCases, id: \.self) { tab in
+                            ConfigTabButton(
+                                tab: tab,
+                                isSelected: selectedTab == tab
+                            ) {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    selectedTab = tab
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+            }
+            .padding(.bottom, 16)
+            .background(Color(.systemBackground))
+            
+            // 主要內容區域
+            ScrollView {
+                VStack(spacing: 24) {
+                    switch selectedTab {
+                                            case .basic:
+                            BasicSettingsView(
+                                selectedAIModel: $selectedAIModel,
+                                maxTokens: $maxTokens,
+                                temperature: $temperature,
+                                systemPrompt: $systemPrompt
+                            )
+                    case .personality:
+                        PersonalitySettingsView(
+                            aiName: $aiName,
+                            aiPersonality: $aiPersonality,
+                            aiSpecialties: $aiSpecialties,
+                            aiResponseStyle: $aiResponseStyle,
+                            aiLanguage: $aiLanguage,
+                            aiAvatar: $aiAvatar
+                        )
+                    case .advanced:
+                        AdvancedSettingsView(
+                            maxContextLength: $maxContextLength,
+                            enableResponseFiltering: $enableResponseFiltering,
+                            enableSentimentAnalysis: $enableSentimentAnalysis,
+                            enableAutoApproval: $enableAutoApproval,
+                            approvalThreshold: $approvalThreshold,
+                            customInstructions: $customInstructions
+                        )
+                    case .templates:
+                        TemplateSettingsView(
+                            showingTemplatePicker: $showingTemplatePicker,
+                            showingCustomInstructions: $showingCustomInstructions
+                        )
+                                            case .test:
+                            TestConnectionView(
+                                selectedAIModel: selectedAIModel,
+                                showingTestResult: $showingTestResult,
+                                testResult: $testResult,
+                                isLoading: $isLoading
+                            )
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 20)
+            }
+        }
+        .sheet(isPresented: $showingPreview) {
+            AIAssistantPreviewView(
+                name: aiName,
+                avatar: aiAvatar,
+                personality: aiPersonality,
+                specialties: aiSpecialties,
+                responseStyle: aiResponseStyle
+            )
+        }
+        .alert("測試結果", isPresented: $showingTestResult) {
+            Button("確定") { }
+        } message: {
+            Text(testResult)
+        }
+    }
+    
+    private func saveSettings() {
+        // 保存所有設定到UserDefaults
+        UserDefaults.standard.set(selectedAIModel, forKey: "selectedAIModel")
+        UserDefaults.standard.set(maxTokens, forKey: "maxTokens")
+        UserDefaults.standard.set(temperature, forKey: "temperature")
+        UserDefaults.standard.set(systemPrompt, forKey: "systemPrompt")
+        UserDefaults.standard.set(aiName, forKey: "aiName")
+        UserDefaults.standard.set(aiPersonality, forKey: "aiPersonality")
+        UserDefaults.standard.set(aiSpecialties, forKey: "aiSpecialties")
+        UserDefaults.standard.set(aiResponseStyle, forKey: "aiResponseStyle")
+        UserDefaults.standard.set(aiLanguage, forKey: "aiLanguage")
+        UserDefaults.standard.set(aiAvatar, forKey: "aiAvatar")
+        UserDefaults.standard.set(maxContextLength, forKey: "maxContextLength")
+        UserDefaults.standard.set(enableResponseFiltering, forKey: "enableResponseFiltering")
+        UserDefaults.standard.set(enableSentimentAnalysis, forKey: "enableSentimentAnalysis")
+        UserDefaults.standard.set(enableAutoApproval, forKey: "enableAutoApproval")
+        UserDefaults.standard.set(approvalThreshold, forKey: "approvalThreshold")
+        UserDefaults.standard.set(customInstructions, forKey: "customInstructions")
+        
+        // 顯示保存成功提示
+        // 這裡可以添加一個簡單的成功提示
+    }
+}
+
+// MARK: - 配置標籤按鈕
+struct ConfigTabButton: View {
+    let tab: AIAssistantConfigView.ConfigTab
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: tab.icon)
+                    .font(.title3)
+                    .foregroundColor(isSelected ? .white : Color.warmAccent)
+                
+                Text(tab.rawValue)
+                    .font(.caption2)
+                    .fontWeight(isSelected ? .semibold : .medium)
+                    .foregroundColor(isSelected ? .white : Color.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(width: 80, height: 60)
+            .background(
+                isSelected ? Color.warmAccent : Color.cardBackground
+            )
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        isSelected ? Color.warmAccent : Color.dividerColor,
+                        lineWidth: 1
+                    )
+            )
+        }
+    }
+}
+
+// MARK: - AI助理預覽卡片
+struct AIAssistantPreviewCard: View {
+    let name: String
+    let avatar: String
+    let personality: String
+    let specialties: String
+    
+    var body: some View {
+        HStack(spacing: 16) {
+            // 頭像
+            Image(systemName: avatar)
+                .font(.system(size: 40))
+                .foregroundColor(.blue)
+                .frame(width: 60, height: 60)
+                .background(Color.blue.opacity(0.1))
+                .clipShape(Circle())
+            
+            // 資訊
+            VStack(alignment: .leading, spacing: 4) {
+                Text(name)
+                    .font(.title3)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                
+                Text(personality)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                
+                Text(specialties)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+            }
+            
+            Spacer()
+            
+            // 狀態指示器
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.green)
+                    .frame(width: 8, height: 8)
+                
+                Text("已配置")
+                    .font(.caption2)
+                    .foregroundColor(.green)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color(.systemGray4), lineWidth: 1)
+        )
+        .padding(.horizontal, 20)
+    }
+}
+
+// MARK: - 基本設定視圖
+struct BasicSettingsView: View {
+    @Binding var selectedAIModel: String
+    @Binding var maxTokens: Int
+    @Binding var temperature: Double
+    @Binding var systemPrompt: String
+    
+    // 預設AI模型選項
+    private let aiModels = [
+        ("GPT-4.1", "最新最強大的AI模型，理解力和創造力最佳", "brain.head.profile", "purple"),
+        ("GPT-4", "高級AI模型，適合複雜任務和創意工作", "cpu", "blue"),
+        ("GPT-4 Mini", "輕量級GPT-4模型，速度快且成本較低", "bolt", "green"),
+        ("GPT-3.5 Turbo", "平衡性能和速度的經典模型", "gear", "orange"),
+        ("Claude-3", "擅長分析和寫作的AI模型", "text.quote", "teal")
+    ]
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // AI模型選擇
+            ConfigSection(title: "AI模型選擇", icon: "brain.head.profile") {
+                VStack(spacing: 12) {
+                    ForEach(aiModels, id: \.0) { model in
+                        AIModelCard(
+                            title: model.0,
+                            description: model.1,
+                            icon: model.2,
+                            color: Color(model.3),
+                            isSelected: selectedAIModel == model.0
+                        ) {
+                            selectedAIModel = model.0
+                            // 根據選擇的模型更新系統提示詞
+                            updateSystemPrompt(for: model.0)
+                        }
+                    }
+                }
+            }
+            
+            // 模型參數
+            ConfigSection(title: "回應參數", icon: "slider.horizontal.3") {
+                VStack(spacing: 16) {
+                    ConfigSlider(
+                        title: "回應長度",
+                        value: Binding(
+                            get: { Double(maxTokens) },
+                            set: { maxTokens = Int($0) }
+                        ),
+                        range: 100...2000,
+                        step: 100,
+                        format: "%.0f"
+                    )
+                    
+                    ConfigSlider(
+                        title: "創造性",
+                        value: $temperature,
+                        range: 0...2,
+                        step: 0.1,
+                        format: "%.1f"
+                    )
+                }
+            }
+            
+            // 系統提示詞
+            ConfigSection(title: "系統提示詞", icon: "text.quote") {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $systemPrompt)
+                        .frame(minHeight: 100)
+                        .padding(12)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(.systemGray4), lineWidth: 1)
+                        )
+                    
+                    Text("這將決定AI助理的基本行為和回應方式")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+    
+    private func updateSystemPrompt(for model: String) {
+        // 所有模型都使用相同的客服提示詞，因為模型本身已經決定了AI的能力
+        systemPrompt = "你是一個專業的客服代表，請用友善、專業的態度回答客戶問題。根據客戶的需求提供準確、有用的資訊，並確保客戶滿意度。"
+    }
+}
+
+// MARK: - 個性設定視圖
+struct PersonalitySettingsView: View {
+    @Binding var aiName: String
+    @Binding var aiPersonality: String
+    @Binding var aiSpecialties: String
+    @Binding var aiResponseStyle: String
+    @Binding var aiLanguage: String
+    @Binding var aiAvatar: String
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // 基本資訊
+            ConfigSection(title: "基本資訊", icon: "person.circle") {
+                VStack(spacing: 16) {
+                    ConfigField(
+                        title: "助理名稱",
+                        placeholder: "例如：EchoChat 助理",
+                        text: $aiName
+                    )
+                    
+                    ConfigPicker(
+                        title: "頭像圖示",
+                        selection: $aiAvatar,
+                        options: [
+                            ("robot", "機器人"),
+                            ("person.circle", "人物"),
+                            ("brain.head.profile", "大腦"),
+                            ("sparkles", "閃爍"),
+                            ("star.circle", "星星")
+                        ]
+                    )
+                }
+            }
+            
+            // 個性特質
+            ConfigSection(title: "個性特質", icon: "heart") {
+                VStack(spacing: 16) {
+                    ConfigField(
+                        title: "個性描述",
+                        placeholder: "例如：友善、專業、耐心",
+                        text: $aiPersonality
+                    )
+                    
+                    ConfigField(
+                        title: "專業領域",
+                        placeholder: "例如：產品諮詢、技術支援",
+                        text: $aiSpecialties
+                    )
+                }
+            }
+            
+            // 回應設定
+            ConfigSection(title: "回應設定", icon: "text.bubble") {
+                VStack(spacing: 16) {
+                    ConfigPicker(
+                        title: "回應風格",
+                        selection: $aiResponseStyle,
+                        options: [
+                            ("正式", "正式"),
+                            ("友善", "友善"),
+                            ("專業", "專業"),
+                            ("輕鬆", "輕鬆"),
+                            ("幽默", "幽默")
+                        ]
+                    )
+                    
+                    ConfigPicker(
+                        title: "語言設定",
+                        selection: $aiLanguage,
+                        options: [
+                            ("繁體中文", "繁體中文"),
+                            ("簡體中文", "簡體中文"),
+                            ("English", "English"),
+                            ("日本語", "日本語")
+                        ]
+                    )
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 進階設定視圖
+struct AdvancedSettingsView: View {
+    @Binding var maxContextLength: Int
+    @Binding var enableResponseFiltering: Bool
+    @Binding var enableSentimentAnalysis: Bool
+    @Binding var enableAutoApproval: Bool
+    @Binding var approvalThreshold: Double
+    @Binding var customInstructions: String
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // 上下文管理
+            ConfigSection(title: "上下文管理", icon: "list.bullet") {
+                VStack(spacing: 16) {
+                    ConfigSlider(
+                        title: "最大上下文長度",
+                        value: Binding(
+                            get: { Double(maxContextLength) },
+                            set: { maxContextLength = Int($0) }
+                        ),
+                        range: 5...20,
+                        step: 1,
+                        format: "%.0f"
+                    )
+                }
+            }
+            
+            // 品質控制
+            ConfigSection(title: "品質控制", icon: "checkmark.shield") {
+                VStack(spacing: 16) {
+                    ConfigToggle(
+                        title: "回應過濾",
+                        description: "過濾不當或無關的回應",
+                        isOn: $enableResponseFiltering
+                    )
+                    
+                    ConfigToggle(
+                        title: "情感分析",
+                        description: "分析客戶情感狀態",
+                        isOn: $enableSentimentAnalysis
+                    )
+                    
+                    ConfigToggle(
+                        title: "自動核准",
+                        description: "自動核准高信心度的回應",
+                        isOn: $enableAutoApproval
+                    )
+                    
+                    if enableAutoApproval {
+                        ConfigSlider(
+                            title: "核准閾值",
+                            value: $approvalThreshold,
+                            range: 0.5...1.0,
+                            step: 0.1,
+                            format: "%.1f"
+                        )
+                    }
+                }
+            }
+            
+            // 自定義指令
+            ConfigSection(title: "自定義指令", icon: "text.quote") {
+                VStack(alignment: .leading, spacing: 8) {
+                    TextEditor(text: $customInstructions)
+                        .frame(minHeight: 80)
+                        .padding(12)
+                        .background(Color(.systemGray6))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(.systemGray4), lineWidth: 1)
+                        )
+                    
+                    Text("額外的指令或限制條件")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 模板設定視圖
+struct TemplateSettingsView: View {
+    @Binding var showingTemplatePicker: Bool
+    @Binding var showingCustomInstructions: Bool
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // 快速模板
+            ConfigSection(title: "快速模板", icon: "text.bubble") {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 12) {
+                    ForEach(ResponseTemplate.templates, id: \.name) { template in
+                        TemplateCard(template: template)
+                    }
+                }
+            }
+            
+            // 操作按鈕
+            VStack(spacing: 12) {
+                ConfigButton(
+                    title: "選擇模板",
+                    icon: "list.bullet",
+                    color: .blue
+                ) {
+                    showingTemplatePicker = true
+                }
+                
+                ConfigButton(
+                    title: "自定義指令",
+                    icon: "pencil",
+                    color: .green
+                ) {
+                    showingCustomInstructions = true
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 測試連線視圖
+struct TestConnectionView: View {
+    let selectedAIModel: String
+    @Binding var showingTestResult: Bool
+    @Binding var testResult: String
+    @Binding var isLoading: Bool
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // AI模型狀態
+            ConfigSection(title: "AI模型狀態", icon: "brain.head.profile") {
+                VStack(spacing: 16) {
+                    HStack {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 12, height: 12)
+                        
+                        Text("已選擇：\(selectedAIModel)")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                        
+                        Spacer()
+                    }
+                    
+                    if isLoading {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.8)
+                            Text("測試中...")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            
+            // 測試按鈕
+            VStack(spacing: 12) {
+                ConfigButton(
+                    title: "測試AI回應",
+                    icon: "text.bubble",
+                    color: .blue
+                ) {
+                    testAIResponse()
+                }
+                
+                ConfigButton(
+                    title: "預覽AI功能",
+                    icon: "eye",
+                    color: .green
+                ) {
+                    previewAIFeatures()
+                }
+                
+                ConfigButton(
+                    title: "檢查模型狀態",
+                    icon: "checkmark.shield",
+                    color: .orange
+                ) {
+                    checkModelStatus()
+                }
+            }
+        }
+    }
+    
+    private func testAIResponse() {
+        isLoading = true
+        // 模擬測試過程
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+            isLoading = false
+            testResult = "AI回應測試成功！\n\n選擇的模型：\(selectedAIModel)\n\n測試回應：您好！我是基於\(selectedAIModel)的AI客服助理，很高興為您服務。我能夠理解複雜問題並提供準確的解答。請問有什麼我可以幫助您的嗎？"
+            showingTestResult = true
+        }
+    }
+    
+    private func previewAIFeatures() {
+        isLoading = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            isLoading = false
+            let modelFeatures = getModelFeatures(for: selectedAIModel)
+            testResult = "\(selectedAIModel) 功能預覽：\n\n\(modelFeatures)"
+            showingTestResult = true
+        }
+    }
+    
+    private func getModelFeatures(for model: String) -> String {
+        switch model {
+        case "GPT-4.1":
+            return "• 最新最先進的AI技術\n• 超強的理解力和創造力\n• 處理複雜問題能力最佳\n• 支援多種語言和格式\n• 最高品質的回應"
+        case "GPT-4":
+            return "• 高級AI模型\n• 優秀的創意和分析能力\n• 適合複雜任務處理\n• 深度理解上下文\n• 專業級回應品質"
+        case "GPT-4 Mini":
+            return "• 輕量級GPT-4模型\n• 快速回應速度\n• 成本效益優化\n• 保持高品質輸出\n• 適合日常客服需求"
+        case "GPT-3.5 Turbo":
+            return "• 經典平衡模型\n• 穩定可靠的表現\n• 快速回應時間\n• 成本效益良好\n• 適合一般客服場景"
+        case "Claude-3":
+            return "• 擅長分析和寫作\n• 優秀的邏輯推理能力\n• 專業文檔處理\n• 深度思考能力\n• 適合技術支援"
+        default:
+            return "• 智能客服回應\n• 多語言支援\n• 上下文理解\n• 專業知識庫\n• 個性化設定"
+        }
+    }
+    
+    private func checkModelStatus() {
+        isLoading = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            isLoading = false
+            testResult = "模型狀態檢查完成：\n\n✅ 模型已就緒\n✅ 服務正常運行\n✅ 回應品質良好\n✅ 設定已保存"
+            showingTestResult = true
+        }
+    }
+}
+
+// MARK: - 支援組件
+
+struct ConfigSection<Content: View>: View {
+    let title: String
+    let icon: String
+    let content: Content
+    
+    init(title: String, icon: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.content = content()
+    }
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundColor(Color.warmAccent)
+                
+                Text(title)
+                    .font(.headline)
+                    .foregroundColor(Color.primaryText)
+                
+                Spacer()
+            }
+            
+            content
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color.cardBackground)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.dividerColor, lineWidth: 1)
+        )
+    }
+}
+
+struct ConfigField: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    var isSecure: Bool = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(Color.primaryText)
+            
+            if isSecure {
+                SecureField(placeholder, text: $text)
+                    .textFieldStyle(CustomTextFieldStyle())
+            } else {
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(CustomTextFieldStyle())
+            }
+        }
+    }
+}
+
+struct ConfigSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let format: String
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(Color.primaryText)
+                
+                Spacer()
+                
+                Text(String(format: format, value))
+                    .font(.caption)
+                    .foregroundColor(Color.secondaryText)
+            }
+            
+            Slider(value: $value, in: range, step: step)
+                .accentColor(Color.warmAccent)
+        }
+    }
+}
+
+struct ConfigPicker: View {
+    let title: String
+    @Binding var selection: String
+    let options: [(String, String)]
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+            
+            Menu {
+                ForEach(options, id: \.0) { option in
+                    Button(option.1) {
+                        selection = option.0
+                    }
+                }
+            } label: {
+                HStack {
+                    Text(options.first { $0.0 == selection }?.1 ?? selection)
+                        .foregroundColor(.primary)
+                    
+                    Spacer()
+                    
+                    Image(systemName: "chevron.down")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.systemGray6))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(.systemGray4), lineWidth: 1)
+                )
+            }
+        }
+    }
+}
+
+struct ConfigToggle: View {
+    let title: String
+    let description: String
+    @Binding var isOn: Bool
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                    
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Toggle("", isOn: $isOn)
+                    .labelsHidden()
+            }
+        }
+    }
+}
+
+struct ConfigButton: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Image(systemName: icon)
+                    .font(.title3)
+                    .foregroundColor(.white)
+                
+                Text(title)
+                    .font(.subheadline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(color)
+            .cornerRadius(8)
+        }
+    }
+}
+
+struct TemplateCard: View {
+    let template: ResponseTemplate
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(template.name)
+                .font(.subheadline)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+            
+            Text(template.content)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(.systemGray6))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color(.systemGray4), lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - AI模型卡片
+struct AIModelCard: View {
+    let title: String
+    let description: String
+    let icon: String
+    let color: Color
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                // 圖示
+                Image(systemName: icon)
+                    .font(.title2)
+                    .foregroundColor(isSelected ? .white : Color.warmAccent)
+                    .frame(width: 40, height: 40)
+                    .background(
+                        isSelected ? Color.warmAccent : Color.warmAccent.opacity(0.1)
+                    )
+                    .clipShape(Circle())
+                
+                // 內容
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(isSelected ? .white : Color.primaryText)
+                    
+                    Text(description)
+                        .font(.caption)
+                        .foregroundColor(isSelected ? .white.opacity(0.8) : Color.secondaryText)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                
+                Spacer()
+                
+                // 選擇指示器
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.title3)
+                        .foregroundColor(.white)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                isSelected ? Color.warmAccent : Color.cardBackground
+            )
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(
+                        isSelected ? Color.warmAccent : Color.dividerColor,
+                        lineWidth: 1
+                    )
+            )
+        }
+    }
+}
+
+// MARK: - AI助理預覽視圖
+struct AIAssistantPreviewView: View {
+    let name: String
+    let avatar: String
+    let personality: String
+    let specialties: String
+    let responseStyle: String
+    @Environment(\.dismiss) private var dismiss
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                // 助理資訊
+                VStack(spacing: 16) {
+                    Image(systemName: avatar)
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
+                        .frame(width: 100, height: 100)
+                        .background(Color.blue.opacity(0.1))
+                        .clipShape(Circle())
+                    
+                    VStack(spacing: 8) {
+                        Text(name)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                        
+                        Text(personality)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Text(specialties)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                
+                // 回應風格預覽
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("回應風格預覽")
+                        .font(.headline)
+                        .foregroundColor(.primary)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("客戶：您好，我想詢問關於產品退貨的事項")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Text("\(name)：您好！我是\(name)，很高興為您服務。關於產品退貨，我可以為您詳細說明相關流程和注意事項。請問您購買的是哪個產品呢？")
+                            .font(.subheadline)
+                            .foregroundColor(.primary)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(8)
+                    }
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .navigationTitle("AI助理預覽")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+#Preview {
+    AIAssistantConfigView()
+} 

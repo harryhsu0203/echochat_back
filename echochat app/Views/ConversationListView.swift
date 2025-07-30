@@ -1,0 +1,577 @@
+//
+//  ConversationListView.swift
+//  echochat app
+//
+//  Created by AI Assistant on 2025/1/27.
+//
+
+import SwiftUI
+import SwiftData
+
+struct ConversationListView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Conversation.lastMessageTime, order: .reverse) private var conversations: [Conversation]
+    @Query(sort: \LineConversation.lastMessageTime, order: .reverse) private var lineConversations: [LineConversation]
+    @State private var showingNewConversation = false
+    @State private var selectedFilter: ConversationFilter = .all
+    @State private var searchText = ""
+    
+    // 整合所有對話
+    var allConversations: [UnifiedConversation] {
+        var unified: [UnifiedConversation] = []
+        
+        // 添加測試對話
+        for conversation in conversations {
+            unified.append(UnifiedConversation(
+                id: conversation.id,
+                title: conversation.title,
+                lastMessage: conversation.lastMessage,
+                lastMessageTime: conversation.lastMessageTime,
+                messageCount: conversation.messageCount,
+                platform: .test,
+                status: .active,
+                isUnread: false,
+                customerName: nil
+            ))
+        }
+        
+        // 添加 Line 對話
+        for conversation in lineConversations {
+            unified.append(UnifiedConversation(
+                id: conversation.id,
+                title: conversation.customerName,
+                lastMessage: conversation.lastMessage,
+                lastMessageTime: conversation.lastMessageTime,
+                messageCount: conversation.messageCount,
+                platform: .line,
+                status: conversation.status,
+                isUnread: conversation.isUnread,
+                customerName: conversation.customerName
+            ))
+        }
+        
+        return unified.sorted { $0.lastMessageTime > $1.lastMessageTime }
+    }
+    
+    var filteredConversations: [UnifiedConversation] {
+        var filtered = allConversations
+        
+        // 平台篩選
+        if selectedFilter != .all {
+            filtered = filtered.filter { $0.platform == selectedFilter.platform }
+        }
+        
+        // 搜尋篩選
+        if !searchText.isEmpty {
+            filtered = filtered.filter { conversation in
+                conversation.title.localizedCaseInsensitiveContains(searchText) ||
+                conversation.lastMessage.localizedCaseInsensitiveContains(searchText) ||
+                (conversation.customerName?.localizedCaseInsensitiveContains(searchText) ?? false)
+            }
+        }
+        
+        return filtered
+    }
+    
+    var body: some View {
+        ZStack {
+            // 柔和漸層背景
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(.systemBackground),
+                    Color(.systemGray6)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            
+            VStack(spacing: 0) {
+                // 標題和搜尋區域
+                VStack(spacing: 15) {
+                    HStack {
+                        Text("對話")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                        
+                        Spacer()
+                        
+                        Button(action: createNewConversation) {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(.blue)
+                        }
+                    }
+                    
+                    // 搜尋欄
+                    HStack {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(.secondary)
+                        
+                        TextField("搜尋對話...", text: $searchText)
+                            .textFieldStyle(PlainTextFieldStyle())
+                        
+                        if !searchText.isEmpty {
+                            Button("清除") {
+                                searchText = ""
+                            }
+                            .font(.caption)
+                            .foregroundColor(.blue)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.systemBackground))
+                    .cornerRadius(10)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color(.systemGray4), lineWidth: 1)
+                    )
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                
+                // 篩選器
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(ConversationFilter.allCases, id: \.self) { filter in
+                            FilterChip(
+                                title: filter.displayName,
+                                isSelected: selectedFilter == filter,
+                                action: { selectedFilter = filter }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.vertical, 10)
+                
+                // 對話列表
+                if filteredConversations.isEmpty {
+                    EmptyStateView()
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            ForEach(filteredConversations) { conversation in
+                                UnifiedConversationRow(conversation: conversation)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                    }
+                }
+            }
+        }
+        .navigationTitle("對話")
+        .navigationBarTitleDisplayMode(.large)
+        .sheet(isPresented: $showingNewConversation) {
+            NewConversationView()
+        }
+        .onAppear {
+            createSampleData()
+        }
+    }
+    
+    private func createNewConversation() {
+        showingNewConversation = true
+    }
+    
+    private func createSampleData() {
+        // 檢查是否已經有對話數據
+        if allConversations.isEmpty {
+            // 創建測試對話
+            let testConversation = Conversation(title: "產品諮詢")
+            testConversation.lastMessage = "請問你們的產品有什麼特色？"
+            testConversation.lastMessageTime = Date().addingTimeInterval(-3600) // 1小時前
+            testConversation.messageCount = 5
+            modelContext.insert(testConversation)
+            
+            let testConversation2 = Conversation(title: "技術支援")
+            testConversation2.lastMessage = "我的帳號無法登入，請協助處理"
+            testConversation2.lastMessageTime = Date().addingTimeInterval(-7200) // 2小時前
+            testConversation2.messageCount = 8
+            modelContext.insert(testConversation2)
+            
+            // 創建 Line 對話
+            let lineConversation1 = LineConversation(customerId: "line_001", customerName: "張小明")
+            lineConversation1.lastMessage = "您好，我想詢問關於產品退貨的事項"
+            lineConversation1.lastMessageTime = Date().addingTimeInterval(-1800) // 30分鐘前
+            lineConversation1.messageCount = 3
+            lineConversation1.status = .active
+            lineConversation1.isUnread = true
+            modelContext.insert(lineConversation1)
+            
+            let lineConversation2 = LineConversation(customerId: "line_002", customerName: "李小華")
+            lineConversation2.lastMessage = "請問你們的客服時間是幾點到幾點？"
+            lineConversation2.lastMessageTime = Date().addingTimeInterval(-5400) // 1.5小時前
+            lineConversation2.messageCount = 6
+            lineConversation2.status = .active
+            lineConversation2.isUnread = false
+            modelContext.insert(lineConversation2)
+            
+            let lineConversation3 = LineConversation(customerId: "line_003", customerName: "王小美")
+            lineConversation3.lastMessage = "我想申請會員升級，需要什麼條件？"
+            lineConversation3.lastMessageTime = Date().addingTimeInterval(-86400) // 1天前
+            lineConversation3.messageCount = 12
+            lineConversation3.status = .resolved
+            lineConversation3.isUnread = false
+            modelContext.insert(lineConversation3)
+        }
+    }
+}
+
+// 統一對話模型
+struct UnifiedConversation: Identifiable {
+    let id: String
+    let title: String
+    let lastMessage: String
+    let lastMessageTime: Date
+    let messageCount: Int
+    let platform: ConversationPlatform
+    let status: ConversationStatus
+    let isUnread: Bool
+    let customerName: String?
+}
+
+enum ConversationPlatform: String, CaseIterable {
+    case test = "test"
+    case line = "line"
+    case whatsapp = "whatsapp"
+    case facebook = "facebook"
+    case instagram = "instagram"
+    
+    var displayName: String {
+        switch self {
+        case .test:
+            return "測試"
+        case .line:
+            return "Line"
+        case .whatsapp:
+            return "WhatsApp"
+        case .facebook:
+            return "Facebook"
+        case .instagram:
+            return "Instagram"
+        }
+    }
+    
+    var icon: String {
+        switch self {
+        case .test:
+            return "message.circle.fill"
+        case .line:
+            return "message.circle.fill"
+        case .whatsapp:
+            return "message.circle.fill"
+        case .facebook:
+            return "person.2.circle.fill"
+        case .instagram:
+            return "camera.circle.fill"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .test:
+            return .blue
+        case .line:
+            return .green
+        case .whatsapp:
+            return .green
+        case .facebook:
+            return .blue
+        case .instagram:
+            return .purple
+        }
+    }
+}
+
+enum ConversationFilter: CaseIterable {
+    case all
+    case test
+    case line
+    case whatsapp
+    case facebook
+    case instagram
+    
+    var displayName: String {
+        switch self {
+        case .all:
+            return "全部"
+        case .test:
+            return "測試"
+        case .line:
+            return "Line"
+        case .whatsapp:
+            return "WhatsApp"
+        case .facebook:
+            return "Facebook"
+        case .instagram:
+            return "Instagram"
+        }
+    }
+    
+    var platform: ConversationPlatform? {
+        switch self {
+        case .all:
+            return nil
+        case .test:
+            return .test
+        case .line:
+            return .line
+        case .whatsapp:
+            return .whatsapp
+        case .facebook:
+            return .facebook
+        case .instagram:
+            return .instagram
+        }
+    }
+}
+
+struct UnifiedConversationRow: View {
+    let conversation: UnifiedConversation
+    
+    var body: some View {
+        NavigationLink(destination: destinationView) {
+            HStack(spacing: 15) {
+                // 平台圖示
+                ZStack {
+                    Circle()
+                        .fill(conversation.platform.color.opacity(0.1))
+                        .frame(width: 50, height: 50)
+                    
+                    Image(systemName: conversation.platform.icon)
+                        .font(.title2)
+                        .foregroundColor(conversation.platform.color)
+                    
+                    // 未讀指示器
+                    if conversation.isUnread {
+                        Circle()
+                            .fill(Color.red)
+                            .frame(width: 12, height: 12)
+                            .offset(x: 18, y: -18)
+                    }
+                }
+                
+                // 對話資訊
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(conversation.title)
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                            .fontWeight(conversation.isUnread ? .bold : .regular)
+                        
+                        Spacer()
+                        
+                        // 狀態標籤
+                        if conversation.status != .active {
+                            StatusBadge(status: conversation.status)
+                        }
+                        
+                        Text(conversation.lastMessageTime, style: .relative)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    
+                    if !conversation.lastMessage.isEmpty {
+                        Text(conversation.lastMessage)
+                            .font(.subheadline)
+                            .foregroundColor(conversation.isUnread ? .primary : .secondary)
+                            .fontWeight(conversation.isUnread ? .medium : .regular)
+                            .lineLimit(2)
+                    }
+                    
+                    HStack {
+                        Text("\(conversation.messageCount) 則訊息")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        
+                        Spacer()
+                        
+                        // 平台標籤
+                        Text(conversation.platform.displayName)
+                            .font(.caption2)
+                            .foregroundColor(conversation.platform.color)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(conversation.platform.color.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+                }
+                
+                // 箭頭
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(conversation.isUnread ? Color.blue.opacity(0.05) : Color(.systemBackground))
+            .cornerRadius(12)
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(conversation.isUnread ? Color.blue.opacity(0.3) : Color(.systemGray4), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.05), radius: 2, x: 0, y: 1)
+        }
+        .buttonStyle(PlainButtonStyle())
+    }
+    
+    @ViewBuilder
+    private var destinationView: some View {
+        switch conversation.platform {
+        case .test:
+            ChatView(conversationId: conversation.id)
+        case .line:
+            LineChatView(conversationId: conversation.id)
+        case .whatsapp, .facebook, .instagram:
+            // 暫時使用測試對話視圖
+            ChatView(conversationId: conversation.id)
+        }
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(isSelected ? .white : .primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color.blue : Color(.systemBackground))
+                .cornerRadius(16)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(isSelected ? Color.blue : Color(.systemGray4), lineWidth: 1)
+                )
+        }
+    }
+}
+
+
+
+struct EmptyStateView: View {
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "message.circle")
+                .font(.system(size: 60))
+                .foregroundColor(.secondary)
+            
+            Text("尚無對話")
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundColor(.primary)
+            
+            Text("開始建立您的第一個對話，或等待客戶訊息")
+                .font(.body)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding()
+    }
+}
+
+struct NewConversationView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+    @State private var title = ""
+    
+    var body: some View {
+        ZStack {
+            // 柔和漸層背景
+            LinearGradient(
+                gradient: Gradient(colors: [
+                    Color(.systemBackground),
+                    Color(.systemGray6)
+                ]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            
+            VStack(spacing: 30) {
+                // 標題
+                VStack(spacing: 10) {
+                    Image(systemName: "message.circle.fill")
+                        .font(.system(size: 60))
+                        .foregroundColor(.blue)
+                    
+                    Text("建立新對話")
+                        .font(.title2)
+                        .fontWeight(.bold)
+                        .foregroundColor(.primary)
+                    
+                    Text("為您的客服對話建立一個新的標題")
+                        .font(.body)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                
+                // 輸入區域
+                VStack(spacing: 20) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("對話標題")
+                            .font(.headline)
+                            .foregroundColor(.primary)
+                        
+                        TextField("輸入標題", text: $title)
+                            .textFieldStyle(CustomTextFieldStyle())
+                    }
+                    
+                    // 按鈕
+                    VStack(spacing: 15) {
+                        Button("建立對話") {
+                            createConversation()
+                        }
+                        .font(.headline)
+                        .foregroundColor(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(
+                            title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?
+                            Color(.systemGray3) :
+                            Color.blue
+                        )
+                        .cornerRadius(12)
+                        .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        
+                        Button("取消") {
+                            dismiss()
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(.blue)
+                    }
+                }
+                
+                Spacer()
+            }
+            .padding(.horizontal, 30)
+            .padding(.vertical, 40)
+        }
+        .navigationTitle("新對話")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
+    }
+    
+    private func createConversation() {
+        let newConversation = Conversation(title: title.isEmpty ? "新對話" : title)
+        modelContext.insert(newConversation)
+        dismiss()
+    }
+}
+
+#Preview {
+    NavigationView {
+        ConversationListView()
+    }
+    .modelContainer(for: Conversation.self, inMemory: true)
+} 

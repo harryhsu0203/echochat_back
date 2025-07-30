@@ -10,23 +10,33 @@ import SwiftData
 
 @main
 struct echochat_appApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+    let modelContainer: ModelContainer
+    @StateObject private var settingsManager = AppSettingsManager.shared
+    
+    init() {
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            let schema = Schema([
+                ChatMessage.self,
+                Conversation.self,
+                LineMessage.self,
+                LineConversation.self,
+                User.self,
+                Channel.self,
+                AIConfiguration.self
+            ])
+            let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+            modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
         } catch {
-            fatalError("Could not create ModelContainer: \(error)")
+            fatalError("Could not initialize ModelContainer: \(error)")
         }
-    }()
-
+    }
+    
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            SplashView()
+                .preferredColorScheme(settingsManager.currentColorScheme)
+                .environmentObject(settingsManager)
         }
-        .modelContainer(sharedModelContainer)
+        .modelContainer(modelContainer)
     }
 }
