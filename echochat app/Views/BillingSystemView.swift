@@ -7,14 +7,46 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
+
+// 格式化最後活動時間
+func formatLastActivity(_ dateString: String) -> String {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+    if let date = formatter.date(from: dateString) {
+        let now = Date()
+        let timeInterval = now.timeIntervalSince(date)
+        
+        if timeInterval < 60 {
+            return "剛剛"
+        } else if timeInterval < 3600 {
+            return "\(Int(timeInterval / 60))分鐘前"
+        } else if timeInterval < 86400 {
+            return "\(Int(timeInterval / 3600))小時前"
+        } else {
+            formatter.dateFormat = "MM/dd HH:mm"
+            return formatter.string(from: date)
+        }
+    }
+    return "未知"
+}
 
 struct BillingSystemView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) private var modelContext: ModelContext
     @EnvironmentObject private var authService: AuthService
+    @StateObject private var billingService = BillingAPIService.shared
+    
     @State private var selectedTimeRange: TimeRange = .month
     @State private var showingUsageDetails = false
     @State private var selectedCustomer: CustomerUsage?
     @State private var showingPlanSelection = false
+    
+    // 資料狀態
+    @State private var billingOverview: BillingOverview?
+    @State private var usageData: [UsageRecord] = []
+    @State private var customers: [CustomerUsage] = []
+    @State private var isLoading = false
+    @State private var errorMessage: String?
     
     enum TimeRange: String, CaseIterable {
         case week = "本週"
@@ -39,22 +71,34 @@ struct BillingSystemView: View {
             ScrollView {
                 VStack(spacing: 25) {
                     // 總覽卡片
-                    OverviewCard()
+                    OverviewCard(overview: billingOverview, isLoading: isLoading)
                     
                     // 時間範圍選擇器
                     TimeRangeSelector(selectedRange: $selectedTimeRange)
                     
                     // 使用量統計
-                    UsageStatisticsView(timeRange: selectedTimeRange)
+                    UsageStatisticsView(timeRange: selectedTimeRange, usageData: usageData)
                     
                     // 客戶使用量列表
-                    CustomerUsageListView(
-                        timeRange: selectedTimeRange,
-                        onCustomerTap: { customer in
-                            selectedCustomer = customer
-                            showingUsageDetails = true
-                        }
-                    )
+                    if !customers.isEmpty {
+                        CustomerUsageListView(
+                            timeRange: selectedTimeRange,
+                            customers: customers,
+                            onCustomerTap: { customer in
+                                selectedCustomer = customer
+                                showingUsageDetails = true
+                            }
+                        )
+                    } else if isLoading {
+                        ProgressView("載入客戶資料...")
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    } else {
+                        Text("暫無客戶資料")
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding()
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -91,61 +135,132 @@ struct BillingSystemView: View {
         .sheet(isPresented: $showingPlanSelection) {
             PlanSelectionView()
         }
+        .onAppear {
+            loadBillingData()
+        }
+        .refreshable {
+            await refreshBillingData()
+        }
     }
+    
+    // MARK: - 資料載入方法
+    private func loadBillingData() {
+        Task {
+            await refreshBillingData()
+        }
+    }
+    
+    private func refreshBillingData() async {
+        isLoading = true
+        errorMessage = nil
+        
+        do {
+            async let overviewTask = billingService.getBillingOverview()
+            async let usageTask = billingService.getUsageStatistics(timeRange: selectedTimeRange.rawValue)
+            async let customersTask = billingService.getCustomerUsage(timeRange: selectedTimeRange.rawValue)
+            
+            let (overview, usage, customersList) = try await (overviewTask, usageTask, customersTask)
+            
+            await MainActor.run {
+                self.billingOverview = overview
+                self.usageData = usage
+                self.customers = customersList
+                self.isLoading = false
+            }
+        } catch {
+            await MainActor.run {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+            }
+        }
+    }
+    
+
 }
 
 // 總覽卡片
 struct OverviewCard: View {
+    let overview: BillingOverview?
+    let isLoading: Bool
+    
     var body: some View {
         VStack(spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("總使用量")
+            if isLoading {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("載入中...")
                         .font(.subheadline)
                         .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(20)
+            } else if let overview = overview {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("總使用量")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Text("\(overview.totalUsage.apiCalls)")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.primary)
+                        
+                        Text("API 呼叫")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                     
-                    Text("1,234,567")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.primary)
+                    Spacer()
                     
-                    Text("tokens")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    VStack(alignment: .trailing, spacing: 4) {
+                        Text("目前方案")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        Text(overview.currentPlan)
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(.green)
+                        
+                        Text("Next: \(formatDate(overview.nextBillingDate))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
                 }
                 
-                Spacer()
+                Divider()
                 
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("目前方案")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    Text("專業版")
-                        .font(.title2)
-                        .fontWeight(.bold)
-                        .foregroundColor(.green)
-                    
-                    Text("Pro Plan")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                HStack {
+                    StatItem(title: "對話數", value: "\(overview.totalUsage.conversations)", icon: "bubble.left.and.bubble.right.fill", color: .green)
+                    Spacer()
+                    StatItem(title: "訊息數", value: "\(overview.totalUsage.messages)", icon: "message.fill", color: .blue)
+                    Spacer()
+                    StatItem(title: "使用率", value: "\(Int(overview.usage.conversations))%", icon: "chart.pie.fill", color: .orange)
                 }
-            }
-            
-            Divider()
-            
-            HStack {
-                StatItem(title: "活躍客戶", value: "45", icon: "person.2.fill", color: .blue)
-                Spacer()
-                StatItem(title: "對話數", value: "1,234", icon: "bubble.left.and.bubble.right.fill", color: .green)
-                Spacer()
-                StatItem(title: "平均回應", value: "2.3s", icon: "clock.fill", color: .orange)
+            } else {
+                Text("無法載入帳務資料")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(20)
             }
         }
         .padding(20)
         .background(Color(.systemBackground))
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
+    }
+    
+    private func formatDate(_ dateString: String) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+        if let date = formatter.date(from: dateString) {
+            formatter.dateFormat = "MM/dd"
+            return formatter.string(from: date)
+        }
+        return "N/A"
     }
 }
 
@@ -205,6 +320,7 @@ struct TimeRangeSelector: View {
 // 使用量統計視圖
 struct UsageStatisticsView: View {
     let timeRange: BillingSystemView.TimeRange
+    let usageData: [UsageRecord]
     
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -212,49 +328,56 @@ struct UsageStatisticsView: View {
                 .font(.headline)
                 .foregroundColor(.primary)
             
-            // 簡化的圖表
-            VStack(spacing: 12) {
-                HStack {
-                    Text("Token 使用量")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text("123,456")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.primary)
-                }
-                
-                // 簡化的進度條
-                GeometryReader { geometry in
-                    ZStack(alignment: .leading) {
-                        Rectangle()
-                            .fill(Color(.systemGray5))
-                            .frame(height: 8)
-                            .cornerRadius(4)
-                        
-                        Rectangle()
-                            .fill(Color.blue)
-                            .frame(width: geometry.size.width * 0.75, height: 8)
-                            .cornerRadius(4)
+            if usageData.isEmpty {
+                Text("暫無使用量資料")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+            } else {
+                // 簡化的圖表
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("API 呼叫次數")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(usageData.last?.apiCalls ?? 0)")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.primary)
+                    }
+                    
+                    // 簡化的進度條
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Rectangle()
+                                .fill(Color(.systemGray5))
+                                .frame(height: 8)
+                                .cornerRadius(4)
+                            
+                            Rectangle()
+                                .fill(Color.blue)
+                                .frame(width: geometry.size.width * 0.75, height: 8)
+                                .cornerRadius(4)
+                        }
+                    }
+                    .frame(height: 8)
+                    
+                    HStack {
+                        Text("對話數量")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                        Text("\(usageData.last?.conversations ?? 0)")
+                            .font(.subheadline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.green)
                     }
                 }
-                .frame(height: 8)
-                
-                HStack {
-                    Text("費用")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Text("$12.34")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.green)
-                }
+                .padding(16)
+                .background(Color(.systemBackground))
+                .cornerRadius(12)
             }
-            .padding(16)
-            .background(Color(.systemBackground))
-            .cornerRadius(12)
         }
     }
 }
@@ -262,6 +385,7 @@ struct UsageStatisticsView: View {
 // 客戶使用量列表
 struct CustomerUsageListView: View {
     let timeRange: BillingSystemView.TimeRange
+    let customers: [CustomerUsage]
     let onCustomerTap: (CustomerUsage) -> Void
     
     var body: some View {
@@ -271,7 +395,7 @@ struct CustomerUsageListView: View {
                 .foregroundColor(.primary)
             
             LazyVStack(spacing: 12) {
-                ForEach(sampleCustomerData, id: \.id) { customer in
+                ForEach(customers, id: \.id) { customer in
                     CustomerUsageRow(customer: customer) {
                         onCustomerTap(customer)
                     }
@@ -306,7 +430,7 @@ struct CustomerUsageRow: View {
                         .fontWeight(.semibold)
                         .foregroundColor(.primary)
                     
-                    Text("\(customer.conversationCount) 個對話")
+                    Text("\(customer.conversations) 個對話")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -314,12 +438,12 @@ struct CustomerUsageRow: View {
                 Spacer()
                 
                 VStack(alignment: .trailing, spacing: 4) {
-                    Text("\(customer.tokenUsage)")
+                    Text("\(customer.apiCalls)")
                         .font(.subheadline)
                         .fontWeight(.semibold)
                         .foregroundColor(.primary)
                     
-                    Text("tokens")
+                    Text("API calls")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -369,10 +493,10 @@ struct UsageDetailsView: View {
                     
                     // 使用量詳情
                     VStack(spacing: 16) {
-                        DetailRow(title: "總 Token 使用量", value: "\(customer.tokenUsage)", icon: "cpu.fill", color: .blue)
-                        DetailRow(title: "對話數量", value: "\(customer.conversationCount)", icon: "bubble.left.and.bubble.right.fill", color: .green)
-                        DetailRow(title: "平均回應時間", value: "\(customer.avgResponseTime)s", icon: "clock.fill", color: .orange)
-                        DetailRow(title: "總費用", value: "$\(String(format: "%.2f", customer.cost))", icon: "dollarsign.circle.fill", color: .green)
+                        DetailRow(title: "API 呼叫次數", value: "\(customer.apiCalls)", icon: "cpu.fill", color: .blue)
+                        DetailRow(title: "對話數量", value: "\(customer.conversations)", icon: "bubble.left.and.bubble.right.fill", color: .green)
+                        DetailRow(title: "訊息數量", value: "\(customer.messages)", icon: "message.fill", color: .orange)
+                        DetailRow(title: "最後活動", value: formatLastActivity(customer.lastActivity), icon: "clock.fill", color: .purple)
                     }
                     .padding(20)
                     .background(Color(.systemBackground))
@@ -421,24 +545,7 @@ struct DetailRow: View {
     }
 }
 
-// 客戶使用量數據模型
-struct CustomerUsage {
-    let id: String
-    let name: String
-    let tokenUsage: Int
-    let conversationCount: Int
-    let avgResponseTime: Double
-    let cost: Double
-}
 
-// 範例數據
-let sampleCustomerData = [
-    CustomerUsage(id: "001", name: "張小明", tokenUsage: 45678, conversationCount: 23, avgResponseTime: 2.1, cost: 4.56),
-    CustomerUsage(id: "002", name: "李小華", tokenUsage: 34567, conversationCount: 18, avgResponseTime: 1.8, cost: 3.45),
-    CustomerUsage(id: "003", name: "王大明", tokenUsage: 23456, conversationCount: 15, avgResponseTime: 2.5, cost: 2.34),
-    CustomerUsage(id: "004", name: "陳小美", tokenUsage: 12345, conversationCount: 12, avgResponseTime: 1.9, cost: 1.23),
-    CustomerUsage(id: "005", name: "劉小強", tokenUsage: 9876, conversationCount: 8, avgResponseTime: 2.3, cost: 0.98)
-]
 
 #Preview {
     BillingSystemView()

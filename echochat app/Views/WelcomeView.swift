@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct WelcomeView: View {
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false

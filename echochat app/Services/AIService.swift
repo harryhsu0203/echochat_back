@@ -13,15 +13,18 @@ class AIService: ObservableObject {
     
     // 從UserDefaults讀取設定
     private var apiURL: String {
-        UserDefaults.standard.string(forKey: "apiURL") ?? "https://api.openai.com/v1/chat/completions"
+        // 使用你的 Windows 後端 API 端點
+        // 請將 YOUR_WINDOWS_IP 替換為你的 Windows 電腦 IP 地址
+        "http://YOUR_WINDOWS_IP:3000/api/ai/chat"
     }
     
     private var apiKey: String {
-        UserDefaults.standard.string(forKey: "apiKey") ?? ""
+        // 使用用戶的認證token，而不是OpenAI API key
+        UserDefaults.standard.string(forKey: "userToken") ?? ""
     }
     
     private var modelName: String {
-        UserDefaults.standard.string(forKey: "modelName") ?? "gpt-3.5-turbo"
+        UserDefaults.standard.string(forKey: "selectedAIModel") ?? "客服專家"
     }
     
     private var maxTokens: Int {
@@ -79,16 +82,19 @@ class AIService: ObservableObject {
     }
     
     private func checkConfiguration() {
-        isConfigured = !apiKey.isEmpty && !systemPrompt.isEmpty
+        // 檢查用戶是否已啟用AI服務
+        let aiServiceEnabled = UserDefaults.standard.bool(forKey: "aiServiceEnabled")
+        isConfigured = aiServiceEnabled && !systemPrompt.isEmpty
     }
     
     func generateResponse(for message: String, conversationHistory: [ChatMessage]) async throws -> String {
         isLoading = true
         defer { isLoading = false }
         
-        // 檢查API金鑰
-        guard !apiKey.isEmpty else {
-            throw AIError.missingAPIKey
+        // 檢查AI服務是否已啟用
+        let aiServiceEnabled = UserDefaults.standard.bool(forKey: "aiServiceEnabled")
+        guard aiServiceEnabled else {
+            throw AIError.serviceNotEnabled
         }
         
         // 構建增強的系統提示詞
@@ -112,6 +118,7 @@ class AIService: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
         
         do {
             request.httpBody = try JSONEncoder().encode(requestBody)
@@ -142,7 +149,7 @@ class AIService: ObservableObject {
                 throw AIError.decodingError
             }
         case 401:
-            throw AIError.invalidAPIKey
+            throw AIError.invalidToken
         case 429:
             throw AIError.rateLimitExceeded
         case 500...599:
@@ -237,7 +244,7 @@ class AIService: ObservableObject {
     // 新增：測試API連線
     func testAPIConnection() async throws -> Bool {
         guard !apiKey.isEmpty else {
-            throw AIError.missingAPIKey
+            throw AIError.configurationError
         }
         
         let testMessage = "你好"
@@ -248,7 +255,7 @@ class AIService: ObservableObject {
     // 新增：獲取模型資訊
     func getAvailableModels() async throws -> [String] {
         guard !apiKey.isEmpty else {
-            throw AIError.missingAPIKey
+            throw AIError.configurationError
         }
         
         guard let url = URL(string: "https://api.openai.com/v1/models") else {
@@ -313,8 +320,8 @@ enum AIError: Error, LocalizedError {
     case networkError
     case encodingError
     case decodingError
-    case missingAPIKey
-    case invalidAPIKey
+    case serviceNotEnabled
+    case invalidToken
     case rateLimitExceeded
     case serverError
     case configurationError
@@ -329,12 +336,12 @@ enum AIError: Error, LocalizedError {
             return "資料編碼錯誤"
         case .decodingError:
             return "資料解碼錯誤"
-        case .missingAPIKey:
-            return "請先在設定中輸入API金鑰"
-        case .invalidAPIKey:
-            return "API金鑰無效，請檢查設定"
+        case .serviceNotEnabled:
+            return "請先啟用AI服務"
+        case .invalidToken:
+            return "認證失敗，請重新登入"
         case .rateLimitExceeded:
-            return "API使用量已達上限，請稍後再試"
+            return "服務使用量已達上限，請稍後再試"
         case .serverError:
             return "伺服器錯誤，請稍後再試"
         case .configurationError:

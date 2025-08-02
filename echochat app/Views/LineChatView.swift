@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct LineChatView: View {
     @Environment(\.modelContext) private var modelContext
@@ -20,6 +21,8 @@ struct LineChatView: View {
     @State private var errorMessage = ""
     @State private var chatInput = ""
     @State private var isHandlingConversation = false
+    @State private var isAIEnabled = false
+    @State private var showingAISettings = false
     
     let conversationId: String
     
@@ -45,6 +48,35 @@ struct LineChatView: View {
             .ignoresSafeArea()
             
             VStack(spacing: 0) {
+                // AI狀態指示器
+                if isAIEnabled {
+                    HStack {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color.green)
+                                .frame(width: 8, height: 8)
+                            Text("AI已啟用")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                        
+                        Spacer()
+                        
+                        Text("自動回應中")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.green.opacity(0.1))
+                    .overlay(
+                        Rectangle()
+                            .frame(height: 1)
+                            .foregroundColor(Color.green.opacity(0.3)),
+                        alignment: .bottom
+                    )
+                }
+                
                 // 訊息列表
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -112,18 +144,33 @@ struct LineChatView: View {
         .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
-                Button("模擬新訊息") {
-                    simulateNewMessage()
+                HStack {
+                    Button("模擬新訊息") {
+                        simulateNewMessage()
+                    }
+                    .foregroundColor(.blue)
+                    
+                    Button("AI設定") {
+                        showingAISettings = true
+                    }
+                    .foregroundColor(.purple)
                 }
-                .foregroundColor(.blue)
             }
             
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button(isHandlingConversation ? "結束接管" : "接管對話") {
-                    toggleHandling()
+                HStack {
+                    Button(isAIEnabled ? "關閉AI" : "啟用AI") {
+                        toggleAI()
+                    }
+                    .foregroundColor(isAIEnabled ? .red : .green)
+                    .fontWeight(.semibold)
+                    
+                    Button(isHandlingConversation ? "結束接管" : "接管對話") {
+                        toggleHandling()
+                    }
+                    .foregroundColor(isHandlingConversation ? .red : .green)
+                    .fontWeight(.semibold)
                 }
-                .foregroundColor(isHandlingConversation ? .red : .green)
-                .fontWeight(.semibold)
             }
         }
         .sheet(isPresented: $showingResponseSheet) {
@@ -133,6 +180,11 @@ struct LineChatView: View {
                 onSend: sendManualResponse
             )
         }
+        .sheet(isPresented: $showingAISettings) {
+            NavigationView {
+                AIAssistantConfigView()
+            }
+        }
         .alert("錯誤", isPresented: $showingError) {
             Button("確定") { }
         } message: {
@@ -140,6 +192,7 @@ struct LineChatView: View {
         }
         .onAppear {
             markConversationAsRead()
+            checkAIStatus()
         }
     }
     
@@ -147,6 +200,64 @@ struct LineChatView: View {
         isHandlingConversation.toggle()
         if !isHandlingConversation {
             chatInput = ""
+        }
+    }
+    
+    private func toggleAI() {
+        // 檢查AI服務是否已啟用
+        let aiServiceEnabled = UserDefaults.standard.bool(forKey: "aiServiceEnabled")
+        let systemPrompt = UserDefaults.standard.string(forKey: "systemPrompt") ?? ""
+        
+        if !aiServiceEnabled {
+            errorMessage = "請先在AI設定中啟用AI服務"
+            showingError = true
+            return
+        }
+        
+        if systemPrompt.isEmpty {
+            errorMessage = "請先設定系統提示詞"
+            showingError = true
+            return
+        }
+        
+        isAIEnabled.toggle()
+        
+        if isAIEnabled {
+            // 啟用AI時，自動處理所有待處理訊息
+            Task {
+                await processPendingMessages()
+            }
+        }
+    }
+    
+    private func processPendingMessages() async {
+        let pendingMessages = messages.filter { $0.status == .pending }
+        
+        for message in pendingMessages {
+            do {
+                let aiResponse = try await aiService.generateResponse(
+                    for: message.messageContent,
+                    conversationHistory: messages.map { ChatMessage(content: $0.messageContent, isFromUser: $0.isFromCustomer, conversationId: $0.conversationId) }
+                )
+                
+                await MainActor.run {
+                    message.aiResponse = aiResponse
+                    message.status = .approved
+                    message.isApproved = true
+                }
+                
+                // 發送到Line
+                await sendToLine(aiResponse, for: message)
+                
+                // 避免API限制，添加延遲
+                try await Task.sleep(nanoseconds: 1_000_000_000) // 1秒延遲
+                
+            } catch {
+                await MainActor.run {
+                    errorMessage = "AI回應生成失敗：\(error.localizedDescription)"
+                    showingError = true
+                }
+            }
         }
     }
     
@@ -201,6 +312,13 @@ struct LineChatView: View {
     private func generateAutoResponse() {
         guard let pendingMessage = messages.first(where: { $0.status == .pending }) else { return }
         
+        // 檢查AI是否已啟用
+        guard isAIEnabled else {
+            errorMessage = "請先啟用AI功能"
+            showingError = true
+            return
+        }
+        
         Task {
             do {
                 let aiResponse = try await aiService.generateResponse(
@@ -220,7 +338,7 @@ struct LineChatView: View {
                 }
             } catch {
                 await MainActor.run {
-                    errorMessage = error.localizedDescription
+                    errorMessage = "AI回應生成失敗：\(error.localizedDescription)"
                     showingError = true
                 }
             }
@@ -312,6 +430,12 @@ struct LineChatView: View {
         )
         
         modelContext.insert(newMessage)
+    }
+    
+    private func checkAIStatus() {
+        let aiServiceEnabled = UserDefaults.standard.bool(forKey: "aiServiceEnabled")
+        let systemPrompt = UserDefaults.standard.string(forKey: "systemPrompt") ?? ""
+        isAIEnabled = aiServiceEnabled && !systemPrompt.isEmpty
     }
     
     private func markConversationAsRead() {
@@ -560,7 +684,6 @@ struct ResponseSheetView: View {
         }
         .navigationTitle("編輯回應")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbarBackground(.hidden, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
                 Button("取消") {

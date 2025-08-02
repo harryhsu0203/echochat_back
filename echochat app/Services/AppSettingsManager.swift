@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 
 class AppSettingsManager: ObservableObject {
     static let shared = AppSettingsManager()

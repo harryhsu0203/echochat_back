@@ -45,7 +45,7 @@ open "echochat app.xcodeproj"
 
 1. 在 Line Developers Console 建立 Channel
 2. 設定 Webhook URL
-3. 參考 `API_PROGRESS_FEATURE.md` 進行詳細設定
+3. 參考 `LINE_API_SETUP.md` 進行詳細設定
 
 ## 🔧 開發環境設定
 

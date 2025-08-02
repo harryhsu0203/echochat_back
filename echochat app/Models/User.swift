@@ -10,7 +10,7 @@ import SwiftData
 
 @Model
 final class User {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var username: String
     var email: String
     var passwordHash: String
@@ -91,3 +91,5 @@ enum Permission: String, CaseIterable, Codable {
         }
     }
 } 
+
+ 

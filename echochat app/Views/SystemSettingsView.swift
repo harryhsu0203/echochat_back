@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct SystemSettingsView: View {
     @AppStorage("selectedLanguage") private var selectedLanguage = "繁體中文"
@@ -19,9 +20,11 @@ struct SystemSettingsView: View {
     @State private var showingColorSchemePicker = false
     @State private var showingResetAlert = false
     @State private var showingSuccessAlert = false
+    @State private var showingLogoutAlert = false
     @State private var alertMessage = ""
     
     @EnvironmentObject private var settingsManager: AppSettingsManager
+    @EnvironmentObject private var authService: AuthService
     
     // 支援的語言
     private let supportedLanguages = [
@@ -65,147 +68,174 @@ struct SystemSettingsView: View {
             )
             .ignoresSafeArea()
             
-            ScrollView {
-                VStack(spacing: 25) {
-                    // 外觀設定
-                    SettingsSection(title: "外觀設定") {
-                        VStack(spacing: 15) {
-                            // 色彩模式
-                            SettingsPickerRow(
-                                title: "色彩模式",
-                                value: colorScheme,
-                                icon: "paintbrush.fill",
-                                action: { 
-                                    settingsManager.triggerHapticFeedback(.light)
-                                    showingColorSchemePicker = true 
-                                }
-                            )
-                            
-                            // 字體大小
-                            SettingsPicker(
-                                title: "字體大小",
-                                selection: $fontSize,
-                                options: fontSizeOptions,
-                                icon: "textformat.size"
-                            )
-                            .onChange(of: fontSize) { _, newValue in
-                                settingsManager.triggerHapticFeedback(.light)
-                                settingsManager.applyFontSizeSettings()
-                            }
-                            
-                            // 預覽區域
-                            ColorSchemePreview()
-                        }
-                    }
-                    
-                    // 語言設定
-                    SettingsSection(title: "語言設定") {
-                        VStack(spacing: 15) {
-                            // 語言選擇
-                            SettingsPickerRow(
-                                title: "系統語言",
-                                value: selectedLanguage,
-                                icon: "globe",
-                                action: { 
-                                    settingsManager.triggerHapticFeedback(.light)
-                                    showingLanguagePicker = true 
-                                }
-                            )
-                            
-                            // 語言資訊
-                            LanguageInfoCard()
-                        }
-                    }
-                    
-                    // 互動設定
-                    SettingsSection(title: "互動設定") {
-                        VStack(spacing: 15) {
-                            // 觸覺回饋
-                            SettingsToggle(
-                                title: "觸覺回饋",
-                                isOn: $enableHapticFeedback,
-                                icon: "iphone.radiowaves.left.and.right"
-                            )
-                            .onChange(of: enableHapticFeedback) { _, newValue in
-                                if newValue {
-                                    settingsManager.triggerHapticFeedback(.medium)
-                                }
-                            }
-                            
-                            // 動畫效果
-                            SettingsToggle(
-                                title: "動畫效果",
-                                isOn: $enableAnimations,
-                                icon: "sparkles"
-                            )
-                            .onChange(of: enableAnimations) { _, newValue in
-                                settingsManager.triggerHapticFeedback(.light)
-                            }
-                            
-                            // 自動鎖定時間
-                            SettingsSlider(
-                                title: "自動鎖定時間",
-                                value: Binding(
-                                    get: { Double(autoLockTimeout) },
-                                    set: { 
-                                        autoLockTimeout = Int($0)
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 20) {
+                        // 用戶資訊卡片
+                        UserInfoCard()
+                        
+                        // 外觀設定
+                        SettingsSection(title: "外觀設定") {
+                            VStack(spacing: 12) {
+                                // 色彩模式
+                                SettingsPickerRow(
+                                    title: "色彩模式",
+                                    value: colorScheme,
+                                    icon: "paintbrush.fill",
+                                    action: { 
                                         settingsManager.triggerHapticFeedback(.light)
+                                        showingColorSchemePicker = true 
                                     }
-                                ),
-                                range: 1...30,
-                                step: 1,
-                                format: "%.0f 分鐘",
-                                icon: "lock"
+                                )
+                                
+                                // 字體大小
+                                SettingsPicker(
+                                    title: "字體大小",
+                                    selection: $fontSize,
+                                    options: fontSizeOptions,
+                                    icon: "textformat.size"
+                                )
+                                .onChange(of: fontSize) { _, newValue in
+                                    settingsManager.triggerHapticFeedback(.light)
+                                    settingsManager.applyFontSizeSettings()
+                                }
+                            }
+                        }
+                        
+                        // 語言設定
+                        SettingsSection(title: "語言設定") {
+                            VStack(spacing: 12) {
+                                // 語言選擇
+                                SettingsPickerRow(
+                                    title: "系統語言",
+                                    value: selectedLanguage,
+                                    icon: "globe",
+                                    action: { 
+                                        settingsManager.triggerHapticFeedback(.light)
+                                        showingLanguagePicker = true 
+                                    }
+                                )
+                            }
+                        }
+                        
+                        // 互動設定
+                        SettingsSection(title: "互動設定") {
+                            VStack(spacing: 12) {
+                                // 觸覺回饋
+                                SettingsToggle(
+                                    title: "觸覺回饋",
+                                    isOn: $enableHapticFeedback,
+                                    icon: "iphone.radiowaves.left.and.right"
+                                )
+                                .onChange(of: enableHapticFeedback) { _, newValue in
+                                    if newValue {
+                                        settingsManager.triggerHapticFeedback(.medium)
+                                    }
+                                }
+                                
+                                // 動畫效果
+                                SettingsToggle(
+                                    title: "動畫效果",
+                                    isOn: $enableAnimations,
+                                    icon: "sparkles"
+                                )
+                                .onChange(of: enableAnimations) { _, newValue in
+                                    settingsManager.triggerHapticFeedback(.light)
+                                }
+                                
+                                // 自動鎖定時間
+                                SettingsSlider(
+                                    title: "自動鎖定時間",
+                                    value: Binding(
+                                        get: { Double(autoLockTimeout) },
+                                        set: { 
+                                            autoLockTimeout = Int($0)
+                                            settingsManager.triggerHapticFeedback(.light)
+                                        }
+                                    ),
+                                    range: 1...30,
+                                    step: 1,
+                                    format: "%.0f 分鐘",
+                                    icon: "lock"
+                                )
+                            }
+                        }
+                        
+                        // 系統資訊
+                        SettingsSection(title: "系統資訊") {
+                            VStack(spacing: 12) {
+                                SystemInfoRow(title: "應用程式版本", value: "1.0.0")
+                                SystemInfoRow(title: "iOS版本", value: UIDevice.current.systemVersion)
+                                SystemInfoRow(title: "設備型號", value: UIDevice.current.model)
+                                SystemInfoRow(title: "可用儲存空間", value: getAvailableStorage())
+                            }
+                        }
+                        
+                        // 操作按鈕
+                        VStack(spacing: 12) {
+                            SettingsButton(
+                                title: "重設為預設值",
+                                icon: "arrow.clockwise",
+                                color: .orange,
+                                action: { 
+                                    settingsManager.triggerHapticFeedback(.medium)
+                                    showingResetAlert = true 
+                                }
+                            )
+                            
+                            SettingsButton(
+                                title: "匯出設定",
+                                icon: "square.and.arrow.up",
+                                color: .blue,
+                                action: { 
+                                    settingsManager.triggerHapticFeedback(.light)
+                                    exportSettings() 
+                                }
+                            )
+                            
+                            SettingsButton(
+                                title: "關於應用程式",
+                                icon: "info.circle",
+                                color: .gray,
+                                action: { 
+                                    settingsManager.triggerHapticFeedback(.light)
+                                    showAboutApp() 
+                                }
                             )
                         }
-                    }
-                    
-                    // 系統資訊
-                    SettingsSection(title: "系統資訊") {
-                        VStack(spacing: 15) {
-                            SystemInfoRow(title: "應用程式版本", value: "1.0.0")
-                            SystemInfoRow(title: "iOS版本", value: UIDevice.current.systemVersion)
-                            SystemInfoRow(title: "設備型號", value: UIDevice.current.model)
-                            SystemInfoRow(title: "可用儲存空間", value: getAvailableStorage())
-                        }
-                    }
-                    
-                    // 操作按鈕
-                    VStack(spacing: 15) {
-                        SettingsButton(
-                            title: "重設為預設值",
-                            icon: "arrow.clockwise",
-                            color: .orange,
-                            action: { 
-                                settingsManager.triggerHapticFeedback(.medium)
-                                showingResetAlert = true 
-                            }
-                        )
                         
-                        SettingsButton(
-                            title: "匯出設定",
-                            icon: "square.and.arrow.up",
-                            color: .blue,
-                            action: { 
-                                settingsManager.triggerHapticFeedback(.light)
-                                exportSettings() 
-                            }
-                        )
-                        
-                        SettingsButton(
-                            title: "關於應用程式",
-                            icon: "info.circle",
-                            color: .gray,
-                            action: { 
-                                settingsManager.triggerHapticFeedback(.light)
-                                showAboutApp() 
-                            }
-                        )
+                        // 底部間距
+                        Spacer(minLength: 100)
                     }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
                 }
-                .padding(.horizontal)
-                .padding(.top)
-                .padding(.bottom, 10)
+                
+                // 底部登出按鈕
+                VStack(spacing: 0) {
+                    Divider()
+                    
+                    Button(action: {
+                        settingsManager.triggerHapticFeedback(.medium)
+                        showingLogoutAlert = true
+                    }) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "rectangle.portrait.and.arrow.right")
+                                .font(.title3)
+                                .foregroundColor(.red)
+                            
+                            Text("登出")
+                                .font(.headline)
+                                .foregroundColor(.red)
+                            
+                            Spacer()
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                        .background(Color(.systemBackground))
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                }
             }
         }
         .navigationTitle("系統設定")
@@ -223,6 +253,16 @@ struct SystemSettingsView: View {
             Button("確定") { }
         } message: {
             Text(alertMessage)
+        }
+        .alert("確認登出", isPresented: $showingLogoutAlert) {
+            Button("取消", role: .cancel) { }
+            Button("登出", role: .destructive) {
+                Task {
+                    await logout()
+                }
+            }
+        } message: {
+            Text("確定要登出嗎？")
         }
         .sheet(isPresented: $showingLanguagePicker) {
             LanguagePickerView(
@@ -279,6 +319,60 @@ struct SystemSettingsView: View {
     private func getAvailableStorage() -> String {
         // 模擬獲取可用儲存空間
         return "2.5 GB"
+    }
+    
+    private func logout() async {
+        await authService.logout()
+    }
+}
+
+// 用戶資訊卡片
+struct UserInfoCard: View {
+    @EnvironmentObject private var authService: AuthService
+    
+    var body: some View {
+        VStack(spacing: 16) {
+            // 用戶頭像
+            Circle()
+                .fill(LinearGradient(
+                    gradient: Gradient(colors: [.blue, .purple]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
+                .frame(width: 80, height: 80)
+                .overlay(
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 40))
+                        .foregroundColor(.white)
+                )
+            
+            // 用戶資訊
+            VStack(spacing: 4) {
+                Text(authService.currentUser?.username ?? "未登入")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.primary)
+                
+                Text(authService.currentUser?.email ?? "請先登入")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+            
+            // 登入狀態指示器
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(authService.currentUser != nil ? Color.green : Color.gray)
+                    .frame(width: 8, height: 8)
+                
+                Text(authService.currentUser != nil ? "已登入" : "未登入")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(20)
+        .background(Color(.systemBackground))
+        .cornerRadius(16)
+        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 2)
     }
 }
 

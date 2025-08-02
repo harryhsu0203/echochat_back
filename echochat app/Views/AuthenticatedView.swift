@@ -9,7 +9,7 @@ import SwiftUI
 import SwiftData
 
 struct AuthenticatedView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) private var modelContext: ModelContext
     @StateObject private var authService: AuthService
     @AppStorage("hasSeenWelcome") private var hasSeenWelcome = false
     
@@ -22,14 +22,22 @@ struct AuthenticatedView: View {
             if authService.isAuthenticated {
                 if hasSeenWelcome {
                     MainTabView()
+                        .environmentObject(authService)
                 } else {
                     WelcomeView()
+                        .environmentObject(authService)
                 }
             } else {
-                LoginView(modelContext: modelContext)
+                LoginView()
+                    .environmentObject(authService)
             }
         }
-        .environmentObject(authService)
+        .onAppear {
+            print("📱 AuthenticatedView 載入，認證狀態: \(authService.isAuthenticated)")
+        }
+        .onChange(of: authService.isAuthenticated) { _, isAuthenticated in
+            print("🔄 認證狀態變更: \(isAuthenticated)")
+        }
     }
 }
 

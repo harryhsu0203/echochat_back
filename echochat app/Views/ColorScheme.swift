@@ -30,30 +30,4 @@ extension Color {
     static let unselectedColor = Color(red: 0.67, green: 0.67, blue: 0.67) // #AAAAAA
 }
 
-// MARK: - 主題色彩管理器
-struct AppColorScheme {
-    static let shared = AppColorScheme()
-    
-    // 主要顏色
-    let primary = Color.warmAccent
-    let secondary = Color.coolAccent
-    let background = Color.primaryBackground
-    let surface = Color.cardBackground
-    
-    // 文字顏色
-    let onPrimary = Color.primaryText
-    let onSecondary = Color.primaryText
-    let onBackground = Color.primaryText
-    let onSurface = Color.primaryText
-    
-    // 狀態顏色
-    let selected = Color.selectedColor
-    let unselected = Color.unselectedColor
-    let divider = Color.dividerColor
-    
-    // 功能顏色
-    let success = Color.coolAccent
-    let warning = Color.warmAccent
-    let error = Color(red: 0.9, green: 0.3, blue: 0.3) // 錯誤紅色
-    let info = Color.coolAccent
-} 
+ 

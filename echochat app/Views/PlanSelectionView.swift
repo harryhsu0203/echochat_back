@@ -6,9 +6,10 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct PlanSelectionView: View {
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.dismiss) private var dismiss: DismissAction
     @State private var selectedPlan: PlanType = .professional
     
     enum PlanType: String, CaseIterable {

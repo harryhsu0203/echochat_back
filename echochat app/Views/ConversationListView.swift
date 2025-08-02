@@ -7,9 +7,10 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct ConversationListView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) private var modelContext: ModelContext
     @Query(sort: \Conversation.lastMessageTime, order: .reverse) private var conversations: [Conversation]
     @Query(sort: \LineConversation.lastMessageTime, order: .reverse) private var lineConversations: [LineConversation]
     @State private var showingNewConversation = false
@@ -463,20 +464,46 @@ struct EmptyStateView: View {
         VStack(spacing: 20) {
             Image(systemName: "message.circle")
                 .font(.system(size: 60))
-                .foregroundColor(.secondary)
+                .foregroundColor(.gray)
             
-            Text("尚無對話")
-                .font(.title3)
+            Text("沒有對話記錄")
+                .font(.title2)
                 .fontWeight(.medium)
                 .foregroundColor(.primary)
             
-            Text("開始建立您的第一個對話，或等待客戶訊息")
+            Text("開始與客戶對話來查看記錄")
                 .font(.body)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
+    }
+}
+
+// MARK: - StatusBadge 組件
+struct StatusBadge: View {
+    let status: ConversationStatus
+    
+    var body: some View {
+        Text(status.displayName)
+            .font(.caption2)
+            .fontWeight(.medium)
+            .foregroundColor(.white)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(statusColor)
+            .cornerRadius(8)
+    }
+    
+    private var statusColor: Color {
+        switch status {
+        case .active:
+            return .green
+        case .resolved:
+            return .blue
+        case .archived:
+            return .gray
+        }
     }
 }
 

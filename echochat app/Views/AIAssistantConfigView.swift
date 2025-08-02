@@ -7,11 +7,13 @@
 
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct AIAssistantConfigView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) private var modelContext: ModelContext
     
-    // 基本設定
+    // AI服務設定
+    @AppStorage("aiServiceEnabled") private var aiServiceEnabled = false
     @AppStorage("selectedAIModel") private var selectedAIModel = "客服專家"
     @AppStorage("maxTokens") private var maxTokens = 1000
     @AppStorage("temperature") private var temperature = 0.7
@@ -43,6 +45,7 @@ struct AIAssistantConfigView: View {
     @State private var customInstructions = ""
     
     enum ConfigTab: String, CaseIterable {
+        case service = "服務設定"
         case basic = "基本設定"
         case personality = "個性設定"
         case advanced = "進階設定"
@@ -51,6 +54,8 @@ struct AIAssistantConfigView: View {
         
         var icon: String {
             switch self {
+            case .service:
+                return "cloud.fill"
             case .basic:
                 return "gear"
             case .personality:
@@ -66,6 +71,8 @@ struct AIAssistantConfigView: View {
         
         var color: Color {
             switch self {
+            case .service:
+                return .blue
             case .basic:
                 return .blue
             case .personality:
@@ -87,24 +94,37 @@ struct AIAssistantConfigView: View {
                 // 頁面標題
                 HStack {
                     Text("AI助理配置")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
+                        .font(.title2)
+                        .fontWeight(.semibold)
                         .foregroundColor(Color.primaryText)
                     
                     Spacer()
                     
                     // 保存按鈕
-                    Button("保存") {
+                    Button(action: {
                         saveSettings()
+                    }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 14, weight: .medium))
+                            
+                            Text("保存")
+                                .font(.system(size: 15, weight: .medium))
+                        }
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(
+                            LinearGradient(
+                                gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.8)]),
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .cornerRadius(12)
+                        .shadow(color: Color.blue.opacity(0.3), radius: 4, x: 0, y: 2)
                     }
-                    .font(.subheadline)
-                    .foregroundColor(Color.warmAccent)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.blue)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(8)
+                    .buttonStyle(PlainButtonStyle())
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 10)
@@ -114,7 +134,8 @@ struct AIAssistantConfigView: View {
                     name: aiName,
                     avatar: aiAvatar,
                     personality: aiPersonality,
-                    specialties: aiSpecialties
+                    specialties: aiSpecialties,
+                    isServiceEnabled: aiServiceEnabled
                 )
                 
                 // 功能標籤按鈕
@@ -141,13 +162,18 @@ struct AIAssistantConfigView: View {
             ScrollView {
                 VStack(spacing: 24) {
                     switch selectedTab {
-                                            case .basic:
-                            BasicSettingsView(
-                                selectedAIModel: $selectedAIModel,
-                                maxTokens: $maxTokens,
-                                temperature: $temperature,
-                                systemPrompt: $systemPrompt
-                            )
+                    case .service:
+                        ServiceSettingsView(
+                            aiServiceEnabled: $aiServiceEnabled,
+                            selectedAIModel: $selectedAIModel
+                        )
+                    case .basic:
+                        BasicSettingsView(
+                            selectedAIModel: $selectedAIModel,
+                            maxTokens: $maxTokens,
+                            temperature: $temperature,
+                            systemPrompt: $systemPrompt
+                        )
                     case .personality:
                         PersonalitySettingsView(
                             aiName: $aiName,
@@ -168,16 +194,15 @@ struct AIAssistantConfigView: View {
                         )
                     case .templates:
                         TemplateSettingsView(
-                            showingTemplatePicker: $showingTemplatePicker,
-                            showingCustomInstructions: $showingCustomInstructions
+                            showingTemplatePicker: $showingTemplatePicker
                         )
-                                            case .test:
-                            TestConnectionView(
-                                selectedAIModel: selectedAIModel,
-                                showingTestResult: $showingTestResult,
-                                testResult: $testResult,
-                                isLoading: $isLoading
-                            )
+                    case .test:
+                        TestConnectionView(
+                            selectedAIModel: selectedAIModel,
+                            showingTestResult: $showingTestResult,
+                            testResult: $testResult,
+                            isLoading: $isLoading
+                        )
                     }
                 }
                 .padding(.horizontal, 20)
@@ -202,6 +227,7 @@ struct AIAssistantConfigView: View {
     
     private func saveSettings() {
         // 保存所有設定到UserDefaults
+        UserDefaults.standard.set(aiServiceEnabled, forKey: "aiServiceEnabled")
         UserDefaults.standard.set(selectedAIModel, forKey: "selectedAIModel")
         UserDefaults.standard.set(maxTokens, forKey: "maxTokens")
         UserDefaults.standard.set(temperature, forKey: "temperature")
@@ -266,6 +292,7 @@ struct AIAssistantPreviewCard: View {
     let avatar: String
     let personality: String
     let specialties: String
+    let isServiceEnabled: Bool
     
     var body: some View {
         HStack(spacing: 16) {
@@ -299,12 +326,12 @@ struct AIAssistantPreviewCard: View {
             // 狀態指示器
             HStack(spacing: 4) {
                 Circle()
-                    .fill(Color.green)
+                    .fill(isServiceEnabled ? Color.green : Color.gray)
                     .frame(width: 8, height: 8)
                 
-                Text("已配置")
+                Text(isServiceEnabled ? "已配置" : "未配置")
                     .font(.caption2)
-                    .foregroundColor(.green)
+                    .foregroundColor(isServiceEnabled ? .green : .gray)
             }
         }
         .padding(.horizontal, 20)
@@ -574,37 +601,29 @@ struct AdvancedSettingsView: View {
 // MARK: - 模板設定視圖
 struct TemplateSettingsView: View {
     @Binding var showingTemplatePicker: Bool
-    @Binding var showingCustomInstructions: Bool
     
     var body: some View {
         VStack(spacing: 20) {
-            // 快速模板
-            ConfigSection(title: "快速模板", icon: "text.bubble") {
+            // 快速模板（簡化版）
+            ConfigSection(title: "常用模板", icon: "text.bubble") {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 2), spacing: 12) {
-                    ForEach(ResponseTemplate.templates, id: \.name) { template in
-                        TemplateCard(template: template)
+                    ForEach(ResponseTemplate.templates.prefix(6), id: \.name) { template in
+                        QuickTemplateCard(template: template)
                     }
                 }
             }
             
-            // 操作按鈕
-            VStack(spacing: 12) {
-                ConfigButton(
-                    title: "選擇模板",
-                    icon: "list.bullet",
-                    color: .blue
-                ) {
-                    showingTemplatePicker = true
-                }
-                
-                ConfigButton(
-                    title: "自定義指令",
-                    icon: "pencil",
-                    color: .green
-                ) {
-                    showingCustomInstructions = true
-                }
+            // 選擇模板按鈕
+            ConfigButton(
+                title: "選擇更多模板",
+                icon: "list.bullet",
+                color: .blue
+            ) {
+                showingTemplatePicker = true
             }
+        }
+        .sheet(isPresented: $showingTemplatePicker) {
+            TemplatePickerView()
         }
     }
 }
@@ -615,6 +634,8 @@ struct TestConnectionView: View {
     @Binding var showingTestResult: Bool
     @Binding var testResult: String
     @Binding var isLoading: Bool
+    @StateObject private var aiService = AIService()
+    @State private var showingChatTest = false
     
     var body: some View {
         VStack(spacing: 20) {
@@ -648,9 +669,17 @@ struct TestConnectionView: View {
             // 測試按鈕
             VStack(spacing: 12) {
                 ConfigButton(
+                    title: "測試AI聊天",
+                    icon: "message.circle",
+                    color: .blue
+                ) {
+                    showingChatTest = true
+                }
+                
+                ConfigButton(
                     title: "測試AI回應",
                     icon: "text.bubble",
-                    color: .blue
+                    color: .green
                 ) {
                     testAIResponse()
                 }
@@ -658,7 +687,7 @@ struct TestConnectionView: View {
                 ConfigButton(
                     title: "預覽AI功能",
                     icon: "eye",
-                    color: .green
+                    color: .orange
                 ) {
                     previewAIFeatures()
                 }
@@ -666,21 +695,38 @@ struct TestConnectionView: View {
                 ConfigButton(
                     title: "檢查模型狀態",
                     icon: "checkmark.shield",
-                    color: .orange
+                    color: .purple
                 ) {
                     checkModelStatus()
                 }
             }
         }
+        .sheet(isPresented: $showingChatTest) {
+            ChatTestView(
+                selectedAIModel: selectedAIModel,
+                aiService: aiService
+            )
+        }
     }
     
     private func testAIResponse() {
         isLoading = true
-        // 模擬測試過程
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-            isLoading = false
-            testResult = "AI回應測試成功！\n\n選擇的模型：\(selectedAIModel)\n\n測試回應：您好！我是基於\(selectedAIModel)的AI客服助理，很高興為您服務。我能夠理解複雜問題並提供準確的解答。請問有什麼我可以幫助您的嗎？"
-            showingTestResult = true
+        
+        Task {
+            do {
+                let response = try await aiService.generateResponse(for: "你好，請簡單介紹一下你自己", conversationHistory: [])
+                await MainActor.run {
+                    isLoading = false
+                    testResult = "AI回應測試成功！\n\n選擇的模型：\(selectedAIModel)\n\n測試回應：\(response)"
+                    showingTestResult = true
+                }
+            } catch {
+                await MainActor.run {
+                    isLoading = false
+                    testResult = "測試失敗：\(error.localizedDescription)\n\n請檢查：\n1. API金鑰是否正確設定\n2. 網路連線是否正常\n3. API端點是否正確"
+                    showingTestResult = true
+                }
+            }
         }
     }
     
@@ -718,6 +764,312 @@ struct TestConnectionView: View {
             testResult = "模型狀態檢查完成：\n\n✅ 模型已就緒\n✅ 服務正常運行\n✅ 回應品質良好\n✅ 設定已保存"
             showingTestResult = true
         }
+    }
+}
+
+// MARK: - AI聊天測試視圖
+struct ChatTestView: View {
+    let selectedAIModel: String
+    let aiService: AIService
+    
+    @Environment(\.dismiss) private var dismiss
+    @State private var messages: [TestChatMessage] = []
+    @State private var inputText = ""
+    @State private var isLoading = false
+    @FocusState private var isInputFocused: Bool
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // 聊天標題
+                VStack(spacing: 8) {
+                    HStack {
+                        Image(systemName: "brain.head.profile")
+                            .foregroundColor(.blue)
+                        Text("AI聊天測試")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                        Spacer()
+                    }
+                    
+                    HStack {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 8, height: 8)
+                        Text("模型：\(selectedAIModel)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Spacer()
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+                .background(Color(.systemBackground))
+                .overlay(
+                    Rectangle()
+                        .frame(height: 0.5)
+                        .foregroundColor(Color(.separator)),
+                    alignment: .bottom
+                )
+                
+                // 聊天訊息列表
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 12) {
+                            if messages.isEmpty {
+                                // 歡迎訊息
+                                VStack(spacing: 16) {
+                                    Image(systemName: "message.circle")
+                                        .font(.system(size: 48))
+                                        .foregroundColor(.blue.opacity(0.6))
+                                    
+                                    Text("開始與AI對話")
+                                        .font(.title3)
+                                        .fontWeight(.medium)
+                                        .foregroundColor(.primary)
+                                    
+                                    Text("測試您的AI配置，發送訊息開始對話")
+                                        .font(.subheadline)
+                                        .foregroundColor(.secondary)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 60)
+                            } else {
+                                ForEach(messages) { message in
+                                    TestChatMessageView(message: message)
+                                        .id(message.id)
+                                }
+                                
+                                if isLoading {
+                                    HStack {
+                                        ProgressView()
+                                            .scaleEffect(0.8)
+                                        Text("AI正在思考...")
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.vertical, 8)
+                                    .id("loading")
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                    }
+                    .onChange(of: messages.count) { oldValue, newValue in
+                        withAnimation(.easeInOut(duration: 0.3)) {
+                            if let lastMessage = messages.last {
+                                proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                            }
+                        }
+                    }
+                    .onChange(of: isLoading) { oldValue, newValue in
+                        if isLoading {
+                            withAnimation(.easeInOut(duration: 0.3)) {
+                                proxy.scrollTo("loading", anchor: .bottom)
+                            }
+                        }
+                    }
+                }
+                
+                // 輸入區域
+                VStack(spacing: 0) {
+                    Divider()
+                    
+                    HStack(spacing: 12) {
+                        TextField("輸入訊息...", text: $inputText, axis: .vertical)
+                            .textFieldStyle(PlainTextFieldStyle())
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 12)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(20)
+                            .focused($isInputFocused)
+                            .disabled(isLoading)
+                        
+                        Button(action: sendMessage) {
+                            Image(systemName: isLoading ? "stop.circle" : "arrow.up.circle.fill")
+                                .font(.title2)
+                                .foregroundColor(isLoading ? .red : .blue)
+                        }
+                        .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isLoading)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(Color(.systemBackground))
+                }
+            }
+            .navigationBarHidden(true)
+        }
+        .onAppear {
+            // 添加歡迎訊息
+            let welcomeMessage = TestChatMessage(
+                id: UUID(),
+                content: "您好！我是您的AI助手，使用\(selectedAIModel)模型。請發送訊息開始測試對話。",
+                isFromUser: false,
+                timestamp: Date()
+            )
+            messages.append(welcomeMessage)
+        }
+    }
+    
+    private func sendMessage() {
+        let trimmedText = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        
+        // 添加用戶訊息
+        let userMessage = TestChatMessage(
+            id: UUID(),
+            content: trimmedText,
+            isFromUser: true,
+            timestamp: Date()
+        )
+        messages.append(userMessage)
+        
+        // 清空輸入框
+        inputText = ""
+        isInputFocused = false
+        
+        // 開始AI回應
+        isLoading = true
+        
+        Task {
+            do {
+                // 準備對話歷史
+                let conversationHistory = messages.map { message in
+                    ChatMessage(
+                        content: message.content,
+                        isFromUser: message.isFromUser
+                    )
+                }
+                
+                let response = try await aiService.generateResponse(for: trimmedText, conversationHistory: conversationHistory)
+                
+                await MainActor.run {
+                    // 添加AI回應
+                    let aiMessage = TestChatMessage(
+                        id: UUID(),
+                        content: response,
+                        isFromUser: false,
+                        timestamp: Date()
+                    )
+                    messages.append(aiMessage)
+                    isLoading = false
+                }
+            } catch {
+                await MainActor.run {
+                    // 添加錯誤訊息
+                    let errorMessage = TestChatMessage(
+                        id: UUID(),
+                        content: "抱歉，回應時發生錯誤：\(error.localizedDescription)",
+                        isFromUser: false,
+                        timestamp: Date()
+                    )
+                    messages.append(errorMessage)
+                    isLoading = false
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 聊天訊息模型
+struct TestChatMessage: Identifiable {
+    let id: UUID
+    let content: String
+    let isFromUser: Bool
+    let timestamp: Date
+}
+
+// MARK: - 聊天訊息視圖
+struct TestChatMessageView: View {
+    let message: TestChatMessage
+    
+    var body: some View {
+        HStack {
+            if message.isFromUser {
+                Spacer()
+                userMessageBubble
+            } else {
+                aiMessageBubble
+                Spacer()
+            }
+        }
+    }
+    
+    private var userMessageBubble: some View {
+        VStack(alignment: .trailing, spacing: 4) {
+            Text(message.content)
+                .font(.subheadline)
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(
+                        gradient: Gradient(colors: [Color.blue, Color.blue.opacity(0.8)]),
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .cornerRadius(18)
+                .cornerRadius(4, corners: [.topLeft])
+            
+            Text(formatTime(message.timestamp))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+    }
+    
+    private var aiMessageBubble: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "brain.head.profile")
+                    .font(.caption)
+                    .foregroundColor(.blue)
+                    .padding(.top, 2)
+                
+                Text(message.content)
+                    .font(.subheadline)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(Color(.systemGray6))
+                    .cornerRadius(18)
+                    .cornerRadius(4, corners: [.topRight])
+            }
+            
+            Text(formatTime(message.timestamp))
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .padding(.leading, 24)
+        }
+    }
+    
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+}
+
+// MARK: - 圓角擴展
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(
+            roundedRect: rect,
+            byRoundingCorners: corners,
+            cornerRadii: CGSize(width: radius, height: radius)
+        )
+        return Path(path.cgPath)
     }
 }
 
@@ -909,30 +1261,222 @@ struct ConfigButton: View {
     }
 }
 
-struct TemplateCard: View {
+// MARK: - 快速模板卡片
+struct QuickTemplateCard: View {
     let template: ResponseTemplate
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(template.name)
-                .font(.subheadline)
-                .fontWeight(.medium)
-                .foregroundColor(.primary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Image(systemName: template.category.icon)
+                    .foregroundColor(.blue)
+                    .font(.title3)
+                
+                Text(template.name)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+            }
             
             Text(template.content)
                 .font(.caption)
                 .foregroundColor(.secondary)
-                .lineLimit(3)
+                .lineLimit(2)
                 .multilineTextAlignment(.leading)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color(.systemGray6))
-        .cornerRadius(8)
+        .padding(12)
+        .background(Color.cardBackground)
+        .cornerRadius(12)
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(Color(.systemGray4), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.dividerColor, lineWidth: 1)
+        )
+    }
+}
+
+// MARK: - 模板選擇器視圖
+struct TemplatePickerView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedCategory: TemplateCategory? = nil
+    @State private var searchText = ""
+    
+    var filteredTemplates: [ResponseTemplate] {
+        let templates = ResponseTemplate.templates
+        if let category = selectedCategory {
+            return templates.filter { $0.category == category }
+        }
+        if !searchText.isEmpty {
+            return templates.filter { 
+                $0.name.localizedCaseInsensitiveContains(searchText) ||
+                $0.content.localizedCaseInsensitiveContains(searchText)
+            }
+        }
+        return templates
+    }
+    
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 0) {
+                // 搜尋欄
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundColor(.secondary)
+                    
+                    TextField("搜尋模板...", text: $searchText)
+                        .textFieldStyle(PlainTextFieldStyle())
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(Color.cardBackground)
+                .cornerRadius(10)
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                
+                // 分類篩選
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        CategoryFilterButton(
+                            title: "全部",
+                            isSelected: selectedCategory == nil
+                        ) {
+                            selectedCategory = nil
+                        }
+                        
+                        ForEach(TemplateCategory.allCases, id: \.self) { category in
+                            CategoryFilterButton(
+                                title: category.displayName,
+                                isSelected: selectedCategory == category
+                            ) {
+                                selectedCategory = category
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                }
+                .padding(.vertical, 10)
+                
+                // 模板列表
+                ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(filteredTemplates, id: \.name) { template in
+                            TemplateDetailCard(template: template)
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 20)
+                }
+            }
+            .navigationTitle("選擇模板")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("完成") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 分類篩選按鈕
+struct CategoryFilterButton: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(isSelected ? .white : .primary)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    isSelected ? Color.blue : Color.cardBackground
+                )
+                .cornerRadius(20)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 20)
+                        .stroke(
+                            isSelected ? Color.blue : Color.dividerColor,
+                            lineWidth: 1
+                        )
+                )
+        }
+    }
+}
+
+// MARK: - 模板詳細卡片
+struct TemplateDetailCard: View {
+    let template: ResponseTemplate
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: template.category.icon)
+                    .foregroundColor(.blue)
+                    .font(.title3)
+                
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(template.name)
+                        .font(.headline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                    
+                    Text(template.category.displayName)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                Button(action: {
+                    // 複製模板內容到剪貼簿
+                    UIPasteboard.general.string = template.content
+                }) {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundColor(.blue)
+                        .font(.title3)
+                }
+            }
+            
+            Text(template.description)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 4)
+            
+            Text(template.content)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+                .padding(12)
+                .background(Color.cardBackground.opacity(0.5))
+                .cornerRadius(8)
+            
+            HStack {
+                Spacer()
+                
+                Button("使用此模板") {
+                    // 這裡可以添加使用模板的邏輯
+                }
+                .font(.caption)
+                .fontWeight(.medium)
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.blue)
+                .cornerRadius(20)
+            }
+        }
+        .padding(16)
+        .background(Color.cardBackground)
+        .cornerRadius(16)
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(Color.dividerColor, lineWidth: 1)
         )
     }
 }
@@ -1069,6 +1613,156 @@ struct AIAssistantPreviewView: View {
                     Button("完成") {
                         dismiss()
                     }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 服務設定視圖
+struct ServiceSettingsView: View {
+    @Binding var aiServiceEnabled: Bool
+    @Binding var selectedAIModel: String
+    
+    // AI服務方案選項
+    private let aiModels = [
+        ("客服專家", "專業客服AI，擅長處理客戶諮詢", "person.circle.fill", "blue"),
+        ("銷售助手", "銷售導向AI，專注於產品推廣", "chart.line.uptrend.xyaxis", "green"),
+        ("技術支援", "技術支援AI，解決技術問題", "wrench.and.screwdriver.fill", "orange"),
+        ("多語言客服", "支援多種語言的國際化客服", "globe", "purple"),
+        ("情感分析", "具備情感分析能力的智能客服", "heart.fill", "red")
+    ]
+    
+    var body: some View {
+        VStack(spacing: 20) {
+            // 服務啟用設定
+            ConfigSection(title: "AI服務狀態", icon: "cloud.fill") {
+                VStack(spacing: 16) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("AI自動回應服務")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            
+                            Text("啟用後，系統將自動回應客戶訊息")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Toggle("", isOn: $aiServiceEnabled)
+                            .labelsHidden()
+                    }
+                    
+                    // 服務狀態指示器
+                    HStack {
+                        Circle()
+                            .fill(aiServiceEnabled ? Color.green : Color.gray)
+                            .frame(width: 8, height: 8)
+                        
+                        Text(aiServiceEnabled ? "AI服務已啟用" : "AI服務未啟用")
+                            .font(.caption)
+                            .foregroundColor(aiServiceEnabled ? .green : .gray)
+                        
+                        Spacer()
+                    }
+                }
+            }
+            
+            // AI模型選擇
+            ConfigSection(title: "AI服務方案", icon: "brain.head.profile") {
+                VStack(spacing: 12) {
+                    ForEach(aiModels, id: \.0) { model in
+                        AIModelCard(
+                            title: model.0,
+                            description: model.1,
+                            icon: model.2,
+                            color: Color(model.3),
+                            isSelected: selectedAIModel == model.0
+                        ) {
+                            selectedAIModel = model.0
+                        }
+                    }
+                }
+            }
+            
+            // 使用統計
+            ConfigSection(title: "使用統計", icon: "chart.bar.fill") {
+                VStack(spacing: 12) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("本月回應次數")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("1,234")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.primary)
+                        }
+                        
+                        Spacer()
+                        
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text("客戶滿意度")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("4.8/5.0")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.green)
+                        }
+                    }
+                    
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("平均回應時間")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("2.3秒")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.primary)
+                        }
+                        
+                        Spacer()
+                        
+                        VStack(alignment: .trailing, spacing: 4) {
+                            Text("問題解決率")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text("85%")
+                                .font(.title2)
+                                .fontWeight(.bold)
+                                .foregroundColor(.blue)
+                        }
+                    }
+                }
+            }
+            
+            // 服務說明
+            ConfigSection(title: "服務說明", icon: "info.circle") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("• 無需設定API金鑰，我們提供完整的AI服務")
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                    
+                    Text("• 支援Line官方帳號自動回應")
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                    
+                    Text("• 可自定義AI個性和回應風格")
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                    
+                    Text("• 24/7全天候自動客服服務")
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                    
+                    Text("• 支援多種語言和專業領域")
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
                 }
             }
         }

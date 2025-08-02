@@ -6,18 +6,22 @@
 //
 
 import SwiftUI
+import SwiftData
 
 struct MainTabView: View {
-    @Environment(\.modelContext) private var modelContext
+    @Environment(\.modelContext) private var modelContext: ModelContext
     @EnvironmentObject private var authService: AuthService
     @State private var selectedTab = 0
+    
+    // Tab 切換管理器
+    @StateObject private var tabManager = TabManager()
     
     var body: some View {
         ZStack {
             // 主要內容區域
             TabView(selection: $selectedTab) {
                 NavigationView {
-                    LineDashboardView()
+                    HomeView()
                 }
                 .tag(0)
                 
@@ -49,7 +53,25 @@ struct MainTabView: View {
                 CustomUltraCompactTabBar(selectedTab: $selectedTab)
             }
         }
-        .ignoresSafeArea(.keyboard)
+        .ignoresSafeArea(.keyboard, edges: .bottom)
+        .environmentObject(tabManager)
+        .onReceive(tabManager.$targetTab) { targetTab in
+            if let targetTab = targetTab {
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    selectedTab = targetTab
+                }
+                tabManager.targetTab = nil
+            }
+        }
+    }
+}
+
+// Tab 切換管理器
+class TabManager: ObservableObject {
+    @Published var targetTab: Int? = nil
+    
+    func switchToTab(_ tab: Int) {
+        targetTab = tab
     }
 }
 

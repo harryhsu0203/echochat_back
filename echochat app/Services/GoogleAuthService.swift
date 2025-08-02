@@ -104,7 +104,9 @@ struct GoogleSignInButton: View {
     
     var body: some View {
         Button(action: {
-            isLoading = true
+            DispatchQueue.main.async {
+                isLoading = true
+            }
             action()
         }) {
             HStack(spacing: 12) {

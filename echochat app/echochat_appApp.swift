@@ -21,8 +21,7 @@ struct echochat_appApp: App {
                 LineMessage.self,
                 LineConversation.self,
                 User.self,
-                Channel.self,
-                AIConfiguration.self
+                Channel.self
             ])
             let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
             modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
