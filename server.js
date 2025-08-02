@@ -1117,8 +1117,8 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     }
 });
 
-// 獲取所有可用的 AI 模型資訊
-app.get('/api/ai-models', authenticateJWT, (req, res) => {
+// 獲取所有可用的 AI 模型資訊（需要認證）
+app.get('/api/ai-models/auth', authenticateJWT, (req, res) => {
     try {
         const models = {
             'gpt-4o-mini': {
