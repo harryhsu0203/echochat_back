@@ -294,6 +294,10 @@ const saveDatabase = () => {
         fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
     } catch (error) {
         console.error('儲存資料庫檔案失敗:', error.message);
+        // 在生產環境中，如果無法寫入文件，我們繼續運行而不拋出錯誤
+        if (process.env.NODE_ENV === 'production') {
+            console.log('⚠️ 生產環境中無法寫入文件，但服務器將繼續運行');
+        }
     }
 };
 
@@ -305,31 +309,36 @@ const connectDatabase = async () => {
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
-            // 創建管理員帳號
-            const adminPassword = 'gele1227';
-            const hash = await new Promise((resolve, reject) => {
-                bcrypt.hash(adminPassword, 10, (err, hash) => {
-                    if (err) reject(err);
-                    else resolve(hash);
+            try {
+                // 創建管理員帳號
+                const adminPassword = 'gele1227';
+                const hash = await new Promise((resolve, reject) => {
+                    bcrypt.hash(adminPassword, 10, (err, hash) => {
+                        if (err) reject(err);
+                        else resolve(hash);
+                    });
                 });
-            });
-            
-            const adminAccount = {
-                id: database.staff_accounts.length + 1,
-                username: 'sunnyharry1',
-                password: hash,
-                name: '系統管理員',
-                role: 'admin',
-                email: '',
-                created_at: new Date().toISOString()
-            };
-            
-            database.staff_accounts.push(adminAccount);
-            saveDatabase();
-            
-            console.log('✅ 管理員帳號已創建');
-            console.log('📧 帳號: sunnyharry1');
-            console.log('🔑 密碼: gele1227');
+                
+                const adminAccount = {
+                    id: database.staff_accounts.length + 1,
+                    username: 'sunnyharry1',
+                    password: hash,
+                    name: '系統管理員',
+                    role: 'admin',
+                    email: '',
+                    created_at: new Date().toISOString()
+                };
+                
+                database.staff_accounts.push(adminAccount);
+                saveDatabase();
+                
+                console.log('✅ 管理員帳號已創建');
+                console.log('📧 帳號: sunnyharry1');
+                console.log('🔑 密碼: gele1227');
+            } catch (writeError) {
+                console.log('⚠️ 無法創建管理員帳號（可能是只讀文件系統）:', writeError.message);
+                console.log('ℹ️ 服務器將繼續運行，但管理員功能可能受限');
+            }
         } else {
             console.log('ℹ️ 管理員帳號已存在');
         }
@@ -338,7 +347,8 @@ const connectDatabase = async () => {
         return true;
     } catch (error) {
         console.error('❌ 資料庫初始化失敗:', error.message);
-        throw error;
+        console.log('⚠️ 服務器將繼續運行，但某些功能可能受限');
+        return true; // 不拋出錯誤，讓服務器繼續運行
     }
 };
 
