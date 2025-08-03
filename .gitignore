@@ -51,6 +51,7 @@ jspm_packages/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS generated files
 .DS_Store
@@ -61,6 +62,23 @@ jspm_packages/
 ehthumbs.db
 Thumbs.db
 
+# Credentials (keep the directory but ignore sensitive files)
+credentials/*.json
+!credentials/google-vision-credentials.json.example
+
+# Data files (keep structure but ignore sensitive data)
+data/*.json
+!data/database.json.example
+
+# Ignore actual sensitive files
+credentials/google-vision-credentials.json
+data/database.json
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
 # Temporary files
-*.tmp
-*.temp 
+tmp/
+temp/ 
