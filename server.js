@@ -5,6 +5,7 @@ const { Client, middleware } = require('@line/bot-sdk');
 const axios = require('axios');
 const path = require('path');
 const { ImageAnnotatorClient } = require('@google-cloud/vision');
+const { OAuth2Client } = require('google-auth-library');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const rateLimit = require('express-rate-limit');
@@ -20,11 +21,16 @@ require('dotenv').config();
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 
+// Google OAuth 配置
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
 // CORS 設定 - 允許前端網站和手機 App 訪問
 app.use(cors({
     origin: [
         'http://localhost:3000',                    // 本地開發
         'http://localhost:5173',                    // Vite 開發伺服器
+<<<<<<< HEAD
         'http://localhost:8000',                    // Python HTTP 伺服器
         'https://ai-chatbot-umqm.onrender.com',    // 您的前端網站
         'https://echochat-web.vercel.app',          // 備用前端網站
@@ -294,10 +300,13 @@ const saveDatabase = () => {
         fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
     } catch (error) {
         console.error('儲存資料庫檔案失敗:', error.message);
+<<<<<<< HEAD
+=======
         // 在生產環境中，如果無法寫入文件，我們繼續運行而不拋出錯誤
         if (process.env.NODE_ENV === 'production') {
             console.log('⚠️ 生產環境中無法寫入文件，但服務器將繼續運行');
         }
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     }
 };
 
@@ -309,6 +318,33 @@ const connectDatabase = async () => {
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
+<<<<<<< HEAD
+            // 創建管理員帳號
+            const adminPassword = 'gele1227';
+            const hash = await new Promise((resolve, reject) => {
+                bcrypt.hash(adminPassword, 10, (err, hash) => {
+                    if (err) reject(err);
+                    else resolve(hash);
+                });
+            });
+            
+            const adminAccount = {
+                id: database.staff_accounts.length + 1,
+                username: 'sunnyharry1',
+                password: hash,
+                name: '系統管理員',
+                role: 'admin',
+                email: '',
+                created_at: new Date().toISOString()
+            };
+            
+            database.staff_accounts.push(adminAccount);
+            saveDatabase();
+            
+            console.log('✅ 管理員帳號已創建');
+            console.log('📧 帳號: sunnyharry1');
+            console.log('🔑 密碼: gele1227');
+=======
             try {
                 // 創建管理員帳號
                 const adminPassword = 'gele1227';
@@ -339,6 +375,7 @@ const connectDatabase = async () => {
                 console.log('⚠️ 無法創建管理員帳號（可能是只讀文件系統）:', writeError.message);
                 console.log('ℹ️ 服務器將繼續運行，但管理員功能可能受限');
             }
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
         } else {
             console.log('ℹ️ 管理員帳號已存在');
         }
@@ -347,8 +384,12 @@ const connectDatabase = async () => {
         return true;
     } catch (error) {
         console.error('❌ 資料庫初始化失敗:', error.message);
+<<<<<<< HEAD
+        throw error;
+=======
         console.log('⚠️ 服務器將繼續運行，但某些功能可能受限');
         return true; // 不拋出錯誤，讓服務器繼續運行
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     }
 };
 
@@ -452,6 +493,113 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+<<<<<<< HEAD
+// Google 登入 API
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const { idToken } = req.body;
+        
+        if (!idToken) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供 Google ID Token'
+            });
+        }
+
+        try {
+            // 驗證 Google ID Token
+            const ticket = await googleClient.verifyIdToken({
+                idToken: idToken,
+                audience: GOOGLE_CLIENT_ID
+            });
+
+            const payload = ticket.getPayload();
+            const { email, name, picture, sub: googleId } = payload;
+
+            console.log('✅ Google 登入驗證成功:', email);
+
+            // 檢查用戶是否已存在
+            let user = database.staff_accounts.find(staff => 
+                staff.email === email || staff.googleId === googleId
+            );
+
+            if (!user) {
+                // 創建新用戶
+                const newUser = {
+                    id: database.staff_accounts.length + 1,
+                    username: email.split('@')[0], // 使用 email 前綴作為用戶名
+                    password: '', // Google 用戶不需要密碼
+                    name: name,
+                    role: 'user',
+                    email: email,
+                    googleId: googleId,
+                    picture: picture,
+                    loginMethod: 'google',
+                    created_at: new Date().toISOString()
+                };
+
+                database.staff_accounts.push(newUser);
+                saveDatabase();
+                user = newUser;
+
+                console.log('✅ 新 Google 用戶已創建:', email);
+            } else {
+                // 更新現有用戶的 Google 資訊
+                user.googleId = googleId;
+                user.picture = picture;
+                user.loginMethod = 'google';
+                user.updated_at = new Date().toISOString();
+                saveDatabase();
+
+                console.log('✅ 現有 Google 用戶已更新:', email);
+            }
+
+            // 生成 JWT Token
+            const token = jwt.sign(
+                { 
+                    id: user.id, 
+                    username: user.username, 
+                    name: user.name, 
+                    role: user.role,
+                    email: user.email,
+                    picture: user.picture
+                },
+                JWT_SECRET,
+                { expiresIn: '24h' }
+            );
+
+            res.json({
+                success: true,
+                token,
+                user: {
+                    id: user.id,
+                    username: user.username,
+                    name: user.name,
+                    role: user.role,
+                    email: user.email,
+                    picture: user.picture,
+                    loginMethod: user.loginMethod
+                }
+            });
+
+        } catch (googleError) {
+            console.error('Google 登入驗證失敗:', googleError);
+            return res.status(401).json({
+                success: false,
+                error: 'Google 登入驗證失敗'
+            });
+        }
+    } catch (error) {
+        console.error('Google 登入錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Google 登入過程發生錯誤'
+        });
+    }
+});
+
+=======
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 驗證用戶身份 API
 app.get('/api/me', authenticateJWT, (req, res) => {
     try {
@@ -924,10 +1072,21 @@ app.post('/api/forgot-password', async (req, res) => {
                 message: '驗證碼已發送到您的電子郵件'
             });
         } catch (emailError) {
+<<<<<<< HEAD
+            console.log('⚠️ 電子郵件發送失敗，但驗證碼已生成:', verificationCode);
+            console.error('📧 詳細錯誤信息:', emailError);
+            
+            // 郵件發送失敗時，返回驗證碼作為備案
+            res.json({
+                success: true,
+                message: '驗證碼已生成（郵件服務暫時不可用）',
+                code: verificationCode
+=======
             console.error('發送密碼重設郵件失敗:', emailError);
             res.status(500).json({
                 success: false,
                 error: '發送驗證碼失敗，請稍後再試'
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
             });
         }
     } catch (error) {
@@ -1127,8 +1286,13 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     }
 });
 
+<<<<<<< HEAD
+// 獲取所有可用的 AI 模型資訊
+app.get('/api/ai-models', authenticateJWT, (req, res) => {
+=======
 // 獲取所有可用的 AI 模型資訊（需要認證）
 app.get('/api/ai-models/auth', authenticateJWT, (req, res) => {
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     try {
         const models = {
             'gpt-4o-mini': {
@@ -1622,6 +1786,8 @@ app.post('/api/webhook/line-simple', (req, res) => {
     }
 });
 
+<<<<<<< HEAD
+=======
 // 強制初始化 API
 app.post('/api/init-database', async (req, res) => {
     try {
@@ -1686,6 +1852,7 @@ app.post('/api/init-database', async (req, res) => {
     }
 });
 
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
     res.json({
@@ -1705,6 +1872,8 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+<<<<<<< HEAD
+=======
 // ==================== AI 模型 API ====================
 
 // AI 模型列表端點 - 不需要認證
@@ -2515,6 +2684,7 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
     }
 });
 
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 錯誤處理中間件
 const errorHandler = (err, req, res, next) => {
     console.error('❌ 伺服器錯誤:', err);

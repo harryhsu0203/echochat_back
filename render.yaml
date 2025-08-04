@@ -2,7 +2,7 @@ services:
   - type: web
     name: echochat-api
     env: node
-    plan: free
+    plan: starter
     buildCommand: npm install
     startCommand: node simple_api_server.js
     envVars:
@@ -10,7 +10,25 @@ services:
         value: production
       - key: JWT_SECRET
         generateValue: true
+      - key: PORT
+        value: 10000
+      - key: DATA_DIR
+        value: /opt/render/project/src/data
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
       - key: EMAIL_USER
         value: echochatsup@gmail.com
       - key: EMAIL_PASS
-        value: skoh eqrm behq twmt 
+        value: skoh eqrm behq twmt
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /opt/render/project/src/credentials/google-vision-credentials.json
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
