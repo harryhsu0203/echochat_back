@@ -30,9 +30,13 @@ app.use(cors({
     origin: [
         'http://localhost:3000',                    // 本地開發
         'http://localhost:5173',                    // Vite 開發伺服器
+<<<<<<< HEAD
+        'http://localhost:8000',                    // Python HTTP 伺服器
         'https://ai-chatbot-umqm.onrender.com',    // 您的前端網站
         'https://echochat-web.vercel.app',          // 備用前端網站
         'https://echochat-app.vercel.app',          // App 網站
+        'https://echochat-frontend.onrender.com',   // Render 前端
+        'https://echochat-web.onrender.com',        // 可能的 Render 前端
         'capacitor://localhost',                    // 手機 App
         'http://localhost:8080',                    // 手機 App 開發
         '*'                                          // 開發時允許所有來源
@@ -296,6 +300,13 @@ const saveDatabase = () => {
         fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
     } catch (error) {
         console.error('儲存資料庫檔案失敗:', error.message);
+<<<<<<< HEAD
+=======
+        // 在生產環境中，如果無法寫入文件，我們繼續運行而不拋出錯誤
+        if (process.env.NODE_ENV === 'production') {
+            console.log('⚠️ 生產環境中無法寫入文件，但服務器將繼續運行');
+        }
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     }
 };
 
@@ -307,6 +318,7 @@ const connectDatabase = async () => {
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
+<<<<<<< HEAD
             // 創建管理員帳號
             const adminPassword = 'gele1227';
             const hash = await new Promise((resolve, reject) => {
@@ -332,6 +344,38 @@ const connectDatabase = async () => {
             console.log('✅ 管理員帳號已創建');
             console.log('📧 帳號: sunnyharry1');
             console.log('🔑 密碼: gele1227');
+=======
+            try {
+                // 創建管理員帳號
+                const adminPassword = 'gele1227';
+                const hash = await new Promise((resolve, reject) => {
+                    bcrypt.hash(adminPassword, 10, (err, hash) => {
+                        if (err) reject(err);
+                        else resolve(hash);
+                    });
+                });
+                
+                const adminAccount = {
+                    id: database.staff_accounts.length + 1,
+                    username: 'sunnyharry1',
+                    password: hash,
+                    name: '系統管理員',
+                    role: 'admin',
+                    email: '',
+                    created_at: new Date().toISOString()
+                };
+                
+                database.staff_accounts.push(adminAccount);
+                saveDatabase();
+                
+                console.log('✅ 管理員帳號已創建');
+                console.log('📧 帳號: sunnyharry1');
+                console.log('🔑 密碼: gele1227');
+            } catch (writeError) {
+                console.log('⚠️ 無法創建管理員帳號（可能是只讀文件系統）:', writeError.message);
+                console.log('ℹ️ 服務器將繼續運行，但管理員功能可能受限');
+            }
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
         } else {
             console.log('ℹ️ 管理員帳號已存在');
         }
@@ -340,7 +384,12 @@ const connectDatabase = async () => {
         return true;
     } catch (error) {
         console.error('❌ 資料庫初始化失敗:', error.message);
+<<<<<<< HEAD
         throw error;
+=======
+        console.log('⚠️ 服務器將繼續運行，但某些功能可能受限');
+        return true; // 不拋出錯誤，讓服務器繼續運行
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     }
 };
 
@@ -444,6 +493,7 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+<<<<<<< HEAD
 // Google 登入 API
 app.post('/api/auth/google', async (req, res) => {
     try {
@@ -548,6 +598,8 @@ app.post('/api/auth/google', async (req, res) => {
     }
 });
 
+=======
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 驗證用戶身份 API
 app.get('/api/me', authenticateJWT, (req, res) => {
     try {
@@ -1020,6 +1072,7 @@ app.post('/api/forgot-password', async (req, res) => {
                 message: '驗證碼已發送到您的電子郵件'
             });
         } catch (emailError) {
+<<<<<<< HEAD
             console.log('⚠️ 電子郵件發送失敗，但驗證碼已生成:', verificationCode);
             console.error('📧 詳細錯誤信息:', emailError);
             
@@ -1028,6 +1081,12 @@ app.post('/api/forgot-password', async (req, res) => {
                 success: true,
                 message: '驗證碼已生成（郵件服務暫時不可用）',
                 code: verificationCode
+=======
+            console.error('發送密碼重設郵件失敗:', emailError);
+            res.status(500).json({
+                success: false,
+                error: '發送驗證碼失敗，請稍後再試'
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
             });
         }
     } catch (error) {
@@ -1227,8 +1286,13 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     }
 });
 
+<<<<<<< HEAD
 // 獲取所有可用的 AI 模型資訊
 app.get('/api/ai-models', authenticateJWT, (req, res) => {
+=======
+// 獲取所有可用的 AI 模型資訊（需要認證）
+app.get('/api/ai-models/auth', authenticateJWT, (req, res) => {
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     try {
         const models = {
             'gpt-4o-mini': {
@@ -1722,6 +1786,73 @@ app.post('/api/webhook/line-simple', (req, res) => {
     }
 });
 
+<<<<<<< HEAD
+=======
+// 強制初始化 API
+app.post('/api/init-database', async (req, res) => {
+    try {
+        console.log('🔧 強制初始化資料庫...');
+        
+        // 重新載入資料庫
+        loadDatabase();
+        
+        // 檢查管理員帳號是否存在
+        const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
+        if (!adminExists) {
+            // 創建管理員帳號
+            const adminPassword = 'gele1227';
+            const hash = await new Promise((resolve, reject) => {
+                bcrypt.hash(adminPassword, 10, (err, hash) => {
+                    if (err) reject(err);
+                    else resolve(hash);
+                });
+            });
+            
+            const adminAccount = {
+                id: database.staff_accounts.length + 1,
+                username: 'sunnyharry1',
+                password: hash,
+                name: '系統管理員',
+                role: 'admin',
+                email: '',
+                created_at: new Date().toISOString()
+            };
+            
+            database.staff_accounts.push(adminAccount);
+            saveDatabase();
+            
+            console.log('✅ 管理員帳號已創建');
+            console.log('📧 帳號: sunnyharry1');
+            console.log('🔑 密碼: gele1227');
+            
+            res.json({
+                success: true,
+                message: '資料庫初始化成功',
+                adminCreated: true,
+                adminAccount: {
+                    username: 'sunnyharry1',
+                    password: 'gele1227'
+                }
+            });
+        } else {
+            console.log('ℹ️ 管理員帳號已存在');
+            res.json({
+                success: true,
+                message: '資料庫已初始化',
+                adminCreated: false
+            });
+        }
+    } catch (error) {
+        console.error('❌ 強制初始化失敗:', error);
+        res.status(500).json({
+            success: false,
+            error: '資料庫初始化失敗',
+            details: error.message
+        });
+    }
+});
+
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
     res.json({
@@ -1741,6 +1872,819 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+<<<<<<< HEAD
+=======
+// ==================== AI 模型 API ====================
+
+// AI 模型列表端點 - 不需要認證
+app.get('/api/ai-models', (req, res) => {
+  try {
+    // 使用預設模型列表（因為沒有OpenAI API金鑰）
+    const models = [
+      {
+        id: 'gpt-4o',
+        name: 'GPT-4o',
+        description: '最新最強大的AI模型，理解力和創造力最佳',
+        maxTokens: 4000,
+        isAvailable: true,
+        category: 'premium'
+      },
+      {
+        id: 'gpt-4o-mini',
+        name: 'GPT-4o Mini',
+        description: '輕量級GPT-4模型，速度快且成本較低',
+        maxTokens: 2000,
+        isAvailable: true,
+        category: 'standard'
+      },
+      {
+        id: 'gpt-4-turbo',
+        name: 'GPT-4 Turbo',
+        description: '高級AI模型，適合複雜任務和創意工作',
+        maxTokens: 4000,
+        isAvailable: true,
+        category: 'premium'
+      },
+      {
+        id: 'gpt-3.5-turbo',
+        name: 'GPT-3.5 Turbo',
+        description: '平衡性能和速度的經典模型',
+        maxTokens: 2000,
+        isAvailable: true,
+        category: 'standard'
+      },
+      {
+        id: 'claude-3-5-sonnet',
+        name: 'Claude 3.5 Sonnet',
+        description: '擅長分析和寫作的AI模型',
+        maxTokens: 4000,
+        isAvailable: true,
+        category: 'premium'
+      }
+    ];
+
+    res.json({
+      success: true,
+      message: 'AI 模型列表獲取成功',
+      data: models
+    });
+  } catch (error) {
+    console.error('獲取 AI 模型列表錯誤:', error);
+    res.status(500).json({
+      success: false,
+      message: '獲取 AI 模型列表失敗',
+      error: error.message
+    });
+  }
+});
+
+// ==================== 頻道管理 API ====================
+
+// 建立新頻道
+app.post('/api/channels', authenticateJWT, (req, res) => {
+    try {
+        const { name, platform, apiKey, channelSecret, webhookUrl, isActive } = req.body;
+        
+        if (!name || !platform || !apiKey || !channelSecret) {
+            return res.status(400).json({
+                success: false,
+                error: '缺少必要欄位'
+            });
+        }
+        
+        loadDatabase();
+        
+        const newChannel = {
+            id: uuidv4(),
+            userId: req.staff.id,
+            name,
+            platform,
+            apiKey,
+            channelSecret,
+            webhookUrl: webhookUrl || '',
+            isActive: isActive || false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+        };
+        
+        if (!database.channels) {
+            database.channels = [];
+        }
+        
+        database.channels.push(newChannel);
+        saveDatabase();
+        
+        console.log('✅ 頻道建立成功:', name);
+        
+        res.status(201).json({
+            success: true,
+            message: '頻道建立成功',
+            channel: newChannel
+        });
+        
+    } catch (error) {
+        console.error('建立頻道錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '建立頻道失敗'
+        });
+    }
+});
+
+// 獲取用戶的頻道列表
+app.get('/api/channels', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        
+        const userChannels = (database.channels || []).filter(
+            channel => channel.userId === req.staff.id
+        );
+        
+        res.json({
+            success: true,
+            channels: userChannels
+        });
+        
+    } catch (error) {
+        console.error('獲取頻道列表錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取頻道列表失敗'
+        });
+    }
+});
+
+// 更新頻道
+app.put('/api/channels/:id', authenticateJWT, (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, platform, apiKey, channelSecret, webhookUrl, isActive } = req.body;
+        
+        loadDatabase();
+        
+        const channelIndex = (database.channels || []).findIndex(
+            channel => channel.id === id && channel.userId === req.staff.id
+        );
+        
+        if (channelIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                error: '頻道不存在'
+            });
+        }
+        
+        const updatedChannel = {
+            ...database.channels[channelIndex],
+            name: name || database.channels[channelIndex].name,
+            platform: platform || database.channels[channelIndex].platform,
+            apiKey: apiKey || database.channels[channelIndex].apiKey,
+            channelSecret: channelSecret || database.channels[channelIndex].channelSecret,
+            webhookUrl: webhookUrl || database.channels[channelIndex].webhookUrl,
+            isActive: isActive !== undefined ? isActive : database.channels[channelIndex].isActive,
+            updatedAt: new Date().toISOString()
+        };
+        
+        database.channels[channelIndex] = updatedChannel;
+        saveDatabase();
+        
+        console.log('✅ 頻道更新成功:', updatedChannel.name);
+        
+        res.json({
+            success: true,
+            message: '頻道更新成功',
+            channel: updatedChannel
+        });
+        
+    } catch (error) {
+        console.error('更新頻道錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '更新頻道失敗'
+        });
+    }
+});
+
+// 刪除頻道
+app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        loadDatabase();
+        
+        const channelIndex = (database.channels || []).findIndex(
+            channel => channel.id === id && channel.userId === req.staff.id
+        );
+        
+        if (channelIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                error: '頻道不存在'
+            });
+        }
+        
+        const deletedChannel = database.channels[channelIndex];
+        database.channels.splice(channelIndex, 1);
+        saveDatabase();
+        
+        console.log('✅ 頻道刪除成功:', deletedChannel.name);
+        
+        res.json({
+            success: true,
+            message: '頻道刪除成功'
+        });
+        
+    } catch (error) {
+        console.error('刪除頻道錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '刪除頻道失敗'
+        });
+    }
+});
+
+// 測試頻道連接
+app.post('/api/channels/test', authenticateJWT, (req, res) => {
+    try {
+        const { platform, apiKey, channelSecret } = req.body;
+        
+        if (!platform || !apiKey || !channelSecret) {
+            return res.status(400).json({
+                success: false,
+                error: '缺少必要欄位'
+            });
+        }
+        
+        // 根據平台進行不同的測試
+        if (platform === 'LINE') {
+            // LINE 平台測試
+            try {
+                const lineClient = new Client({
+                    channelAccessToken: apiKey,
+                    channelSecret: channelSecret
+                });
+                
+                // 測試獲取 LINE 配置
+                lineClient.getProfile('test').catch(() => {
+                    // 忽略錯誤，這只是測試連接
+                });
+                
+                res.json({
+                    success: true,
+                    message: 'LINE 頻道連接測試成功'
+                });
+            } catch (error) {
+                res.json({
+                    success: false,
+                    error: 'LINE 頻道連接測試失敗'
+                });
+            }
+        } else {
+            // 其他平台的測試邏輯
+            res.json({
+                success: true,
+                message: `${platform} 頻道連接測試成功`
+            });
+        }
+        
+    } catch (error) {
+        console.error('測試頻道連接錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '測試頻道連接失敗'
+        });
+    }
+});
+
+// ==================== 移動端 LINE 整合 API ====================
+
+// 獲取 LINE 整合列表
+app.get('/api/mobile/line-integrations', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        
+        const userChannels = (database.channels || []).filter(
+            channel => channel.userId === req.staff.id && channel.platform === 'LINE'
+        );
+        
+        const integrations = userChannels.map(channel => ({
+            id: channel.id,
+            name: channel.name,
+            status: channel.isActive ? 'active' : 'inactive',
+            platform: 'LINE',
+            createdAt: channel.createdAt,
+            updatedAt: channel.updatedAt
+        }));
+        
+        res.json({
+            success: true,
+            integrations: integrations
+        });
+        
+    } catch (error) {
+        console.error('獲取 LINE 整合列表錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取 LINE 整合列表失敗'
+        });
+    }
+});
+
+// 獲取 LINE 對話記錄
+app.get('/api/mobile/line-conversations/:tenantId', authenticateJWT, (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        const { page = 1, limit = 20 } = req.query;
+        
+        loadDatabase();
+        
+        // 驗證用戶是否有權限訪問此頻道
+        const channel = (database.channels || []).find(
+            ch => ch.id === tenantId && ch.userId === req.staff.id
+        );
+        
+        if (!channel) {
+            return res.status(404).json({
+                success: false,
+                error: '頻道不存在'
+            });
+        }
+        
+        // 獲取該頻道的對話記錄
+        const conversations = (database.chat_history || []).filter(
+            conv => conv.platform === 'line'
+        );
+        
+        // 分頁處理
+        const startIndex = (page - 1) * limit;
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedConversations = conversations.slice(startIndex, endIndex);
+        
+        res.json({
+            success: true,
+            conversations: paginatedConversations,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: conversations.length,
+                totalPages: Math.ceil(conversations.length / limit)
+            }
+        });
+        
+    } catch (error) {
+        console.error('獲取 LINE 對話記錄錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取 LINE 對話記錄失敗'
+        });
+    }
+});
+
+// 獲取對話詳情
+app.get('/api/mobile/conversation/:conversationId', authenticateJWT, (req, res) => {
+    try {
+        const { conversationId } = req.params;
+        
+        loadDatabase();
+        
+        const conversation = (database.chat_history || []).find(
+            conv => conv.id === conversationId
+        );
+        
+        if (!conversation) {
+            return res.status(404).json({
+                success: false,
+                error: '對話不存在'
+            });
+        }
+        
+        res.json({
+            success: true,
+            conversation: conversation
+        });
+        
+    } catch (error) {
+        console.error('獲取對話詳情錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取對話詳情失敗'
+        });
+    }
+});
+
+// 發送測試訊息
+app.post('/api/mobile/line-test-message/:tenantId', authenticateJWT, (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        const { message } = req.body;
+        
+        loadDatabase();
+        
+        // 驗證用戶是否有權限訪問此頻道
+        const channel = (database.channels || []).find(
+            ch => ch.id === tenantId && ch.userId === req.staff.id
+        );
+        
+        if (!channel) {
+            return res.status(404).json({
+                success: false,
+                error: '頻道不存在'
+            });
+        }
+        
+        if (!channel.isActive) {
+            return res.status(400).json({
+                success: false,
+                error: '頻道未啟用'
+            });
+        }
+        
+        // 這裡應該實際發送 LINE 訊息
+        // 目前返回模擬成功回應
+        res.json({
+            success: true,
+            message: '測試訊息發送成功',
+            sentMessage: message || '測試訊息'
+        });
+        
+    } catch (error) {
+        console.error('發送測試訊息錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '發送測試訊息失敗'
+        });
+    }
+});
+
+// 獲取 LINE 統計資料
+app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        
+        loadDatabase();
+        
+        // 驗證用戶是否有權限訪問此頻道
+        const channel = (database.channels || []).find(
+            ch => ch.id === tenantId && ch.userId === req.staff.id
+        );
+        
+        if (!channel) {
+            return res.status(404).json({
+                success: false,
+                error: '頻道不存在'
+            });
+        }
+        
+        // 獲取該頻道的統計資料
+        const conversations = (database.chat_history || []).filter(
+            conv => conv.platform === 'line'
+        );
+        
+        const totalConversations = conversations.length;
+        const totalMessages = conversations.reduce((sum, conv) => sum + (conv.messages?.length || 0), 0);
+        
+        // 計算今日對話數
+        const today = new Date().toDateString();
+        const todayConversations = conversations.filter(conv => 
+            new Date(conv.createdAt).toDateString() === today
+        ).length;
+        
+        // 計算平均訊息數
+        const averageMessages = totalConversations > 0 ? (totalMessages / totalConversations).toFixed(1) : 0;
+        
+        res.json({
+            success: true,
+            stats: {
+                totalConversations,
+                totalMessages,
+                todayConversations,
+                averageMessages: parseFloat(averageMessages)
+            }
+        });
+        
+    } catch (error) {
+        console.error('獲取 LINE 統計資料錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取 LINE 統計資料失敗'
+        });
+    }
+});
+
+// 搜尋對話
+app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res) => {
+    try {
+        const { tenantId } = req.params;
+        const { query, page = 1, limit = 20 } = req.query;
+        
+        if (!query) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供搜尋關鍵字'
+            });
+        }
+        
+        loadDatabase();
+        
+        // 驗證用戶是否有權限訪問此頻道
+        const channel = (database.channels || []).find(
+            ch => ch.id === tenantId && ch.userId === req.staff.id
+        );
+        
+        if (!channel) {
+            return res.status(404).json({
+                success: false,
+                error: '頻道不存在'
+            });
+        }
+        
+        // 搜尋對話
+        const conversations = (database.chat_history || []).filter(conv => {
+            if (conv.platform !== 'line') return false;
+            
+            // 搜尋訊息內容
+            return conv.messages?.some(msg => 
+                msg.content?.toLowerCase().includes(query.toLowerCase())
+            );
+        });
+        
+        // 分頁處理
+        const startIndex = (page - 1) * limit;
+        const endIndex = startIndex + parseInt(limit);
+        const paginatedConversations = conversations.slice(startIndex, endIndex);
+        
+        res.json({
+            success: true,
+            conversations: paginatedConversations,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total: conversations.length,
+                totalPages: Math.ceil(conversations.length / limit)
+            }
+        });
+        
+    } catch (error) {
+        console.error('搜尋對話錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '搜尋對話失敗'
+        });
+    }
+});
+
+// ==================== 帳務系統 API ====================
+
+// 獲取帳務總覽
+app.get('/api/billing/overview', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        
+        // 模擬帳務資料
+        const overview = {
+            currentPlan: 'Pro',
+            nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            totalUsage: {
+                conversations: 1250,
+                messages: 8500,
+                apiCalls: 15000
+            },
+            limits: {
+                conversations: 2000,
+                messages: 10000,
+                apiCalls: 20000
+            },
+            usage: {
+                conversations: 62.5,
+                messages: 85.0,
+                apiCalls: 75.0
+            }
+        };
+        
+        res.json({
+            success: true,
+            overview: overview
+        });
+        
+    } catch (error) {
+        console.error('獲取帳務總覽錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取帳務總覽失敗'
+        });
+    }
+});
+
+// 獲取使用量統計
+app.get('/api/billing/usage', authenticateJWT, (req, res) => {
+    try {
+        const { timeRange = 'month' } = req.query;
+        
+        loadDatabase();
+        
+        // 根據時間範圍生成使用量資料
+        const generateUsageData = (range) => {
+            const data = [];
+            const now = new Date();
+            
+            switch (range) {
+                case 'week':
+                    for (let i = 6; i >= 0; i--) {
+                        const date = new Date(now);
+                        date.setDate(date.getDate() - i);
+                        data.push({
+                            date: date.toISOString().split('T')[0],
+                            conversations: Math.floor(Math.random() * 50) + 10,
+                            messages: Math.floor(Math.random() * 200) + 50,
+                            apiCalls: Math.floor(Math.random() * 300) + 100
+                        });
+                    }
+                    break;
+                case 'month':
+                    for (let i = 29; i >= 0; i--) {
+                        const date = new Date(now);
+                        date.setDate(date.getDate() - i);
+                        data.push({
+                            date: date.toISOString().split('T')[0],
+                            conversations: Math.floor(Math.random() * 30) + 5,
+                            messages: Math.floor(Math.random() * 150) + 30,
+                            apiCalls: Math.floor(Math.random() * 200) + 50
+                        });
+                    }
+                    break;
+                case 'quarter':
+                    for (let i = 89; i >= 0; i--) {
+                        const date = new Date(now);
+                        date.setDate(date.getDate() - i);
+                        if (i % 3 === 0) {
+                            data.push({
+                                date: date.toISOString().split('T')[0],
+                                conversations: Math.floor(Math.random() * 100) + 20,
+                                messages: Math.floor(Math.random() * 500) + 100,
+                                apiCalls: Math.floor(Math.random() * 800) + 200
+                            });
+                        }
+                    }
+                    break;
+                case 'year':
+                    for (let i = 11; i >= 0; i--) {
+                        const date = new Date(now);
+                        date.setMonth(date.getMonth() - i);
+                        data.push({
+                            date: date.toISOString().split('T')[0].substring(0, 7),
+                            conversations: Math.floor(Math.random() * 500) + 100,
+                            messages: Math.floor(Math.random() * 2000) + 500,
+                            apiCalls: Math.floor(Math.random() * 3000) + 800
+                        });
+                    }
+                    break;
+            }
+            
+            return data;
+        };
+        
+        const usageData = generateUsageData(timeRange);
+        
+        res.json({
+            success: true,
+            usage: usageData,
+            timeRange: timeRange
+        });
+        
+    } catch (error) {
+        console.error('獲取使用量統計錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取使用量統計失敗'
+        });
+    }
+});
+
+// 獲取客戶使用量列表
+app.get('/api/billing/customers', authenticateJWT, (req, res) => {
+    try {
+        const { timeRange = 'month' } = req.query;
+        
+        loadDatabase();
+        
+        // 模擬客戶使用量資料
+        const customers = [
+            {
+                id: '1',
+                name: '美髮沙龍 A',
+                conversations: 150,
+                messages: 850,
+                apiCalls: 1200,
+                lastActivity: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString()
+            },
+            {
+                id: '2',
+                name: '美容院 B',
+                conversations: 89,
+                messages: 520,
+                apiCalls: 780,
+                lastActivity: new Date(Date.now() - 5 * 60 * 60 * 1000).toISOString()
+            },
+            {
+                id: '3',
+                name: '美甲店 C',
+                conversations: 67,
+                messages: 380,
+                apiCalls: 550,
+                lastActivity: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
+            }
+        ];
+        
+        res.json({
+            success: true,
+            customers: customers
+        });
+        
+    } catch (error) {
+        console.error('獲取客戶使用量錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取客戶使用量失敗'
+        });
+    }
+});
+
+// 獲取方案列表
+app.get('/api/billing/plans', authenticateJWT, (req, res) => {
+    try {
+        const plans = [
+            {
+                id: 'basic',
+                name: '基本方案',
+                price: 299,
+                currency: 'TWD',
+                period: 'month',
+                features: [
+                    '每月 1,000 次對話',
+                    '每月 5,000 次 API 呼叫',
+                    '基本 AI 助理',
+                    '電子郵件支援'
+                ],
+                limits: {
+                    conversations: 1000,
+                    messages: 5000,
+                    apiCalls: 5000
+                }
+            },
+            {
+                id: 'pro',
+                name: '專業方案',
+                price: 599,
+                currency: 'TWD',
+                period: 'month',
+                features: [
+                    '每月 5,000 次對話',
+                    '每月 25,000 次 API 呼叫',
+                    '進階 AI 助理',
+                    'LINE Bot 整合',
+                    '優先支援'
+                ],
+                limits: {
+                    conversations: 5000,
+                    messages: 25000,
+                    apiCalls: 25000
+                }
+            },
+            {
+                id: 'enterprise',
+                name: '企業方案',
+                price: 1299,
+                currency: 'TWD',
+                period: 'month',
+                features: [
+                    '無限制對話',
+                    '無限制 API 呼叫',
+                    '自定義 AI 助理',
+                    '多平台整合',
+                    '專屬支援'
+                ],
+                limits: {
+                    conversations: -1,
+                    messages: -1,
+                    apiCalls: -1
+                }
+            }
+        ];
+        
+        res.json({
+            success: true,
+            plans: plans
+        });
+        
+    } catch (error) {
+        console.error('獲取方案列表錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取方案列表失敗'
+        });
+    }
+});
+
+>>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 錯誤處理中間件
 const errorHandler = (err, req, res, next) => {
     console.error('❌ 伺服器錯誤:', err);
