@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: echochat-api
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node simple_api_server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: EMAIL_USER
+        value: echochatsup@gmail.com
+      - key: EMAIL_PASS
+        value: skoh eqrm behq twmt 
