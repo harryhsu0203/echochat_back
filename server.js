@@ -1186,7 +1186,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         // 獲取第一個配置，如果沒有則返回預設值
         const config = database.ai_assistant_config[0] || {
             assistant_name: '設計師 Rainy',
-            llm: 'gpt-4o-mini',
+            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: 'OBJECTIVE(目標任務):\n你的目標是客戶服務與美容美髮發行錄，創造一個良好的對話體驗，讓客戶感到舒適，願意分享他們的真實想法及需求。\n\nSTYLE(風格/個性):\n你的個性是很健談並且很直率人保學會存在，樂於創造一個放鬆和友好的氣圍。\n\nTONE(語調):\n親性、溫柔、深情人心。',
             created_at: new Date().toISOString(),
@@ -1259,7 +1259,7 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     try {
         const defaultConfig = {
             assistant_name: '設計師 Rainy',
-            llm: 'gpt-4o-mini',
+            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: 'OBJECTIVE(目標任務):\n你的目標是客戶服務與美容美髮發行錄，創造一個良好的對話體驗，讓客戶感到舒適，願意分享他們的真實想法及需求。\n\nSTYLE(風格/個性):\n你的個性是很健談並且很直率人保學會存在，樂於創造一個放鬆和友好的氣圍。\n\nTONE(語調):\n親性、溫柔、深情人心。',
             created_at: new Date().toISOString(),
@@ -1289,24 +1289,20 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
 <<<<<<< HEAD
 // 獲取所有可用的 AI 模型資訊
 app.get('/api/ai-models', authenticateJWT, (req, res) => {
-=======
-// 獲取所有可用的 AI 模型資訊（需要認證）
-app.get('/api/ai-models/auth', authenticateJWT, (req, res) => {
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     try {
         const models = {
-            'gpt-4o-mini': {
-                name: 'GPT-4o Mini',
+            'gpt-3.5-turbo': {
+                name: 'GPT-3.5 Turbo',
                 provider: 'OpenAI',
                 description: '快速且經濟實惠的對話體驗，適合一般客服需求',
                 features: ['快速回應', '成本效益高', '支援多語言', '適合日常對話'],
                 pricing: '經濟實惠',
                 speed: '快速',
-                max_tokens: 128000,
+                max_tokens: 16385,
                 supported_languages: ['中文', '英文', '日文', '韓文', '法文', '德文', '西班牙文']
             },
-            'gpt-4o': {
-                name: 'GPT-4o',
+            'gpt-4-turbo': {
+                name: 'GPT-4 Turbo',
                 provider: 'OpenAI',
                 description: '高級版本，提供更強大的理解和生成能力',
                 features: ['高品質回應', '複雜任務處理', '創意內容生成', '深度理解'],
@@ -1376,12 +1372,23 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         loadDatabase();
         
         // 獲取 AI 助理配置
-        const aiConfig = database.ai_assistant_config[0] || {
-            assistant_name: 'AI 助理',
-            llm: 'gpt-4o-mini',
-            use_case: 'customer-service',
-            description: '我是您的智能客服助理，很高興為您服務！'
-        };
+        const aiConfig = database.ai_assistant_config && database.ai_assistant_config[0] ? 
+            database.ai_assistant_config[0] : {
+                assistant_name: 'AI 助理',
+                llm: 'gpt-3.5-turbo',  // 使用正確的 OpenAI 模型名稱
+                use_case: 'customer-service',
+                description: '我是您的智能客服助理，很高興為您服務！'
+            };
+
+        // 確保模型名稱有效
+        const modelName = aiConfig.llm || 'gpt-3.5-turbo';
+        
+        // 驗證模型名稱
+        const validModels = ['gpt-3.5-turbo', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo-16k'];
+        if (!validModels.includes(modelName)) {
+            console.warn(`無效的模型名稱: ${modelName}，使用預設值 gpt-3.5-turbo`);
+            aiConfig.llm = 'gpt-3.5-turbo';
+        }
 
         // 構建系統提示詞
         const systemPrompt = `你是 ${aiConfig.assistant_name}，${aiConfig.description}。你的使用場景是：${aiConfig.use_case}。請根據用戶的問題提供專業、友善且有用的回應。`;
@@ -1402,11 +1409,13 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             { role: 'user', content: message }
         ];
 
+        console.log('使用的模型:', aiConfig.llm || 'gpt-3.5-turbo');
+        
         // 調用 OpenAI API
         const openaiResponse = await axios.post(
             'https://api.openai.com/v1/chat/completions',
             {
-                model: aiConfig.llm,
+                model: aiConfig.llm || 'gpt-3.5-turbo',
                 messages: messages,
                 max_tokens: 1000,
                 temperature: 0.7
@@ -1890,9 +1899,9 @@ app.get('/api/ai-models', (req, res) => {
         category: 'premium'
       },
       {
-        id: 'gpt-4o-mini',
-        name: 'GPT-4o Mini',
-        description: '輕量級GPT-4模型，速度快且成本較低',
+        id: 'gpt-3.5-turbo',
+        name: 'GPT-3.5 Turbo',
+        description: '輕量級GPT模型，速度快且成本較低',
         maxTokens: 2000,
         isAvailable: true,
         category: 'standard'
