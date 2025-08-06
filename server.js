@@ -30,7 +30,6 @@ app.use(cors({
     origin: [
         'http://localhost:3000',                    // 本地開發
         'http://localhost:5173',                    // Vite 開發伺服器
-<<<<<<< HEAD
         'http://localhost:8000',                    // Python HTTP 伺服器
         'https://ai-chatbot-umqm.onrender.com',    // 您的前端網站
         'https://echochat-web.vercel.app',          // 備用前端網站
@@ -45,180 +44,6 @@ app.use(cors({
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
-
-// 電子郵件配置
-const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // 使用 STARTTLS
-    auth: {
-        user: process.env.EMAIL_USER || 'echochatsup@gmail.com',
-        pass: process.env.EMAIL_PASS || 'skoh eqrm behq twmt' // 移除空格，直接使用應用程式密碼
-    },
-    tls: {
-        rejectUnauthorized: false
-    }
-});
-
-// 生成隨機驗證碼
-const generateVerificationCode = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-};
-
-// 發送驗證碼電子郵件
-const sendVerificationEmail = async (email, code) => {
-    const mailOptions = {
-        from: process.env.EMAIL_USER || 'echochatsup@gmail.com',
-        to: email,
-        subject: 'EchoChat - 電子郵件驗證碼',
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <h2 style="color: #667eea;">EchoChat 電子郵件驗證</h2>
-                <p>您的驗證碼是：</p>
-                <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #667eea; border-radius: 8px; margin: 20px 0;">
-                    ${code}
-                </div>
-                <p>此驗證碼將在10分鐘後過期。</p>
-                <p>如果您沒有要求此驗證碼，請忽略此郵件。</p>
-            </div>
-        `
-    };
-    
-    return transporter.sendMail(mailOptions);
-};
-
-// 發送密碼重設電子郵件
-const sendPasswordResetEmail = async (email, code) => {
-    const mailOptions = {
-        from: process.env.EMAIL_USER || 'echochatsup@gmail.com',
-        to: email,
-        subject: 'EchoChat - 密碼重設驗證碼',
-        html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                <h2 style="color: #667eea;">EchoChat 密碼重設</h2>
-                <p>您要求重設密碼，請使用以下驗證碼：</p>
-                <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #667eea; border-radius: 8px; margin: 20px 0;">
-                    ${code}
-                </div>
-                <p>此驗證碼將在10分鐘後過期。</p>
-                <p>如果您沒有要求重設密碼，請忽略此郵件並確保您的帳號安全。</p>
-                <p style="color: #666; font-size: 12px; margin-top: 30px;">
-                    此郵件由 EchoChat 系統自動發送，請勿回覆。
-                </p>
-            </div>
-        `
-    };
-    
-    return transporter.sendMail(mailOptions);
-};
-
-// 初始化 Vision 實體 (如果環境變數存在)
-let vision = null;
-if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    vision = new ImageAnnotatorClient();
-}
-
-// 確保上傳目錄存在
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir);
-}
-
-// 設置 multer
-const upload = multer({ dest: 'uploads/' });
-
-// 安全性中間件
-app.use(
-  helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com", "'unsafe-inline'", "'unsafe-eval'"],
-        scriptSrcAttr: ["'unsafe-inline'"],
-        styleSrc: ["'self'", "https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com", "'unsafe-inline'"],
-        imgSrc: ["'self'", "data:", "https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com"],
-        fontSrc: ["'self'", "https://cdn.jsdelivr.net", "https://cdnjs.cloudflare.com", "data:"],
-        connectSrc: ["'self'"]
-      },
-    },
-  })
-);
-
-// 環境變數檢查端點（僅用於開發和測試）
-app.get('/api/env-check', (req, res) => {
-    const envVars = {
-        NODE_ENV: process.env.NODE_ENV,
-        LINE_CHANNEL_ACCESS_TOKEN: process.env.LINE_CHANNEL_ACCESS_TOKEN ? '已設置' : '未設置',
-        LINE_CHANNEL_SECRET: process.env.LINE_CHANNEL_SECRET ? '已設置' : '未設置',
-        OPENAI_API_KEY: process.env.OPENAI_API_KEY ? '已設置' : '未設置',
-        JWT_SECRET: process.env.JWT_SECRET ? '已設置' : '未設置',
-        PORT: process.env.PORT,
-        DATA_DIR: process.env.DATA_DIR
-    };
-    
-    // 添加詳細的 OpenAI API 金鑰檢查
-    const openaiKeyStatus = {
-        exists: !!process.env.OPENAI_API_KEY,
-        length: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
-        startsWith: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) : 'N/A',
-        isValid: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.startsWith('sk-') : false
-    };
-    
-    // 添加詳細的 JWT_SECRET 檢查
-    const jwtSecretStatus = {
-        exists: !!process.env.JWT_SECRET,
-        length: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
-        isDefault: !process.env.JWT_SECRET || process.env.JWT_SECRET === 'echochat-jwt-secret-key-2024',
-        value: process.env.JWT_SECRET ? process.env.JWT_SECRET.substring(0, 10) + '...' : 'N/A'
-    };
-    
-    res.json({
-        success: true,
-        message: '環境變數檢查',
-        envVars: envVars,
-        openaiKeyStatus: openaiKeyStatus,
-        jwtSecretStatus: jwtSecretStatus,
-        timestamp: new Date().toISOString()
-    });
-});
-
-// 測試端點 - 用於診斷認證問題
-app.get('/api/test-auth', (req, res) => {
-    const authHeader = req.headers.authorization;
-    const token = authHeader ? authHeader.split(' ')[1] : null;
-    
-    const testResult = {
-        hasAuthHeader: !!authHeader,
-        hasToken: !!token,
-        tokenLength: token ? token.length : 0,
-        jwtSecretExists: !!process.env.JWT_SECRET,
-        jwtSecretLength: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
-        timestamp: new Date().toISOString()
-    };
-    
-    if (token) {
-        try {
-            const decoded = jwt.verify(token, JWT_SECRET);
-            testResult.tokenValid = true;
-            testResult.decodedToken = {
-                id: decoded.id,
-                username: decoded.username,
-                role: decoded.role,
-                iat: decoded.iat,
-                exp: decoded.exp
-            };
-        } catch (error) {
-            testResult.tokenValid = false;
-            testResult.tokenError = error.message;
-        }
-    }
-    
-    res.json({
-        success: true,
-        message: '認證測試結果',
-        testResult: testResult
-    });
-});
 
 // 請求速率限制
 const limiter = rateLimit({
@@ -249,10 +74,6 @@ app.use('/api/login', loginLimiter);
 app.use('/webhook', express.raw({ type: '*/*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-// 移除靜態檔案服務，因為這是純 API 服務
-// app.use(express.static('public'));
-// app.use('/js', express.static(path.join(__dirname, 'public/js')));
-// app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // JWT 身份驗證中間件
 const authenticateJWT = (req, res, next) => {
@@ -391,13 +212,10 @@ const saveDatabase = () => {
         fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
     } catch (error) {
         console.error('儲存資料庫檔案失敗:', error.message);
-<<<<<<< HEAD
-=======
         // 在生產環境中，如果無法寫入文件，我們繼續運行而不拋出錯誤
         if (process.env.NODE_ENV === 'production') {
             console.log('⚠️ 生產環境中無法寫入文件，但服務器將繼續運行');
         }
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     }
 };
 
@@ -409,33 +227,6 @@ const connectDatabase = async () => {
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
-<<<<<<< HEAD
-            // 創建管理員帳號
-            const adminPassword = 'gele1227';
-            const hash = await new Promise((resolve, reject) => {
-                bcrypt.hash(adminPassword, 10, (err, hash) => {
-                    if (err) reject(err);
-                    else resolve(hash);
-                });
-            });
-            
-            const adminAccount = {
-                id: database.staff_accounts.length + 1,
-                username: 'sunnyharry1',
-                password: hash,
-                name: '系統管理員',
-                role: 'admin',
-                email: '',
-                created_at: new Date().toISOString()
-            };
-            
-            database.staff_accounts.push(adminAccount);
-            saveDatabase();
-            
-            console.log('✅ 管理員帳號已創建');
-            console.log('📧 帳號: sunnyharry1');
-            console.log('🔑 密碼: gele1227');
-=======
             try {
                 // 創建管理員帳號
                 const adminPassword = 'gele1227';
@@ -466,7 +257,6 @@ const connectDatabase = async () => {
                 console.log('⚠️ 無法創建管理員帳號（可能是只讀文件系統）:', writeError.message);
                 console.log('ℹ️ 服務器將繼續運行，但管理員功能可能受限');
             }
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
         } else {
             console.log('ℹ️ 管理員帳號已存在');
         }
@@ -475,12 +265,8 @@ const connectDatabase = async () => {
         return true;
     } catch (error) {
         console.error('❌ 資料庫初始化失敗:', error.message);
-<<<<<<< HEAD
-        throw error;
-=======
         console.log('⚠️ 服務器將繼續運行，但某些功能可能受限');
         return true; // 不拋出錯誤，讓服務器繼續運行
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
     }
 };
 
@@ -591,540 +377,6 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
-<<<<<<< HEAD
-// Google 登入 API
-app.post('/api/auth/google', async (req, res) => {
-    try {
-        const { idToken } = req.body;
-        
-        if (!idToken) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供 Google ID Token'
-            });
-        }
-
-        try {
-            // 驗證 Google ID Token
-            const ticket = await googleClient.verifyIdToken({
-                idToken: idToken,
-                audience: GOOGLE_CLIENT_ID
-            });
-
-            const payload = ticket.getPayload();
-            const { email, name, picture, sub: googleId } = payload;
-
-            console.log('✅ Google 登入驗證成功:', email);
-
-            // 檢查用戶是否已存在
-            let user = database.staff_accounts.find(staff => 
-                staff.email === email || staff.googleId === googleId
-            );
-
-            if (!user) {
-                // 創建新用戶
-                const newUser = {
-                    id: database.staff_accounts.length + 1,
-                    username: email.split('@')[0], // 使用 email 前綴作為用戶名
-                    password: '', // Google 用戶不需要密碼
-                    name: name,
-                    role: 'user',
-                    email: email,
-                    googleId: googleId,
-                    picture: picture,
-                    loginMethod: 'google',
-                    created_at: new Date().toISOString()
-                };
-
-                database.staff_accounts.push(newUser);
-                saveDatabase();
-                user = newUser;
-
-                console.log('✅ 新 Google 用戶已創建:', email);
-            } else {
-                // 更新現有用戶的 Google 資訊
-                user.googleId = googleId;
-                user.picture = picture;
-                user.loginMethod = 'google';
-                user.updated_at = new Date().toISOString();
-                saveDatabase();
-
-                console.log('✅ 現有 Google 用戶已更新:', email);
-            }
-
-            // 生成 JWT Token
-            const token = jwt.sign(
-                { 
-                    id: user.id, 
-                    username: user.username, 
-                    name: user.name, 
-                    role: user.role,
-                    email: user.email,
-                    picture: user.picture
-                },
-                JWT_SECRET,
-                { expiresIn: '24h' }
-            );
-
-            console.log('✅ Google 登入成功，生成 Token:', {
-                username: user.username,
-                role: user.role,
-                email: user.email,
-                jwtSecretExists: !!process.env.JWT_SECRET,
-                tokenLength: token.length
-            });
-
-            res.json({
-                success: true,
-                token,
-                user: {
-                    id: user.id,
-                    username: user.username,
-                    name: user.name,
-                    role: user.role,
-                    email: user.email,
-                    picture: user.picture,
-                    loginMethod: user.loginMethod
-                }
-            });
-
-        } catch (googleError) {
-            console.error('Google 登入驗證失敗:', googleError);
-            return res.status(401).json({
-                success: false,
-                error: 'Google 登入驗證失敗'
-            });
-        }
-    } catch (error) {
-        console.error('Google 登入錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Google 登入過程發生錯誤'
-        });
-    }
-});
-
-
-// 驗證用戶身份 API
-app.get('/api/me', authenticateJWT, (req, res) => {
-    try {
-        const user = findStaffById(req.staff.id);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: '用戶不存在'
-            });
-        }
-        
-        res.json({
-            success: true,
-            user: {
-                id: user.id,
-                username: user.username,
-                name: user.name,
-                role: user.role
-            }
-        });
-    } catch (error) {
-        console.error('獲取用戶資料錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '伺服器錯誤'
-        });
-    }
-});
-
-// 發送電子郵件驗證碼 API
-app.post('/api/send-verification-code', async (req, res) => {
-    try {
-        const { email } = req.body;
-        
-        if (!email) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供電子郵件地址'
-            });
-        }
-        
-        // 檢查電子郵件是否已存在
-        const existingUser = database.staff_accounts.find(staff => staff.email === email);
-        if (existingUser) {
-            return res.status(400).json({
-                success: false,
-                error: '此電子郵件已被註冊'
-            });
-        }
-        
-        // 生成驗證碼
-        const code = generateVerificationCode();
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10分鐘後過期
-        
-        // 儲存驗證碼（移除舊的同一電子郵件驗證碼）
-        database.email_verifications = database.email_verifications.filter(
-            verification => verification.email !== email
-        );
-        database.email_verifications.push({
-            email: email,
-            code: code,
-            expiresAt: expiresAt.toISOString(),
-            verified: false
-        });
-        saveDatabase();
-        
-        // 嘗試發送電子郵件
-        try {
-            console.log('📧 嘗試發送郵件到:', email);
-            console.log('🔧 郵件配置:', {
-                user: process.env.EMAIL_USER || 'echochatsup@gmail.com',
-                pass: process.env.EMAIL_PASS ? '***已設定***' : '***未設定***'
-            });
-            
-            await sendVerificationEmail(email, code);
-            console.log('✅ 驗證碼已發送到:', email);
-            
-            res.json({
-                success: true,
-                message: '驗證碼已發送到您的電子郵件'
-            });
-        } catch (emailError) {
-            console.log('⚠️ 電子郵件發送失敗，但驗證碼已生成:', code);
-            console.error('📧 詳細錯誤信息:', emailError);
-            
-            // 郵件發送失敗時，返回驗證碼作為備案
-            res.json({
-                success: true,
-                message: '驗證碼已生成（郵件服務暫時不可用）',
-                code: code
-            });
-        }
-        
-    } catch (error) {
-        console.error('發送驗證碼錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '發送驗證碼失敗，請稍後再試'
-        });
-    }
-});
-
-// 驗證電子郵件驗證碼 API
-app.post('/api/verify-code', async (req, res) => {
-    try {
-        const { email, code } = req.body;
-        
-        if (!email || !code) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供電子郵件和驗證碼'
-            });
-        }
-        
-        // 尋找驗證記錄
-        const verification = database.email_verifications.find(
-            v => v.email === email && v.code === code && !v.verified
-        );
-        
-        if (!verification) {
-            return res.status(400).json({
-                success: false,
-                error: '驗證碼無效'
-            });
-        }
-        
-        // 檢查是否過期
-        if (new Date() > new Date(verification.expiresAt)) {
-            return res.status(400).json({
-                success: false,
-                error: '驗證碼已過期'
-            });
-        }
-        
-        // 標記為已驗證
-        verification.verified = true;
-        saveDatabase();
-        
-        res.json({
-            success: true,
-            message: '電子郵件驗證成功'
-        });
-        
-    } catch (error) {
-        console.error('驗證碼驗證錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '驗證失敗，請稍後再試'
-        });
-    }
-});
-
-// 使用者註冊 API
-app.post('/api/register', async (req, res) => {
-    try {
-        const { username, email, password, lineConfig } = req.body;
-        
-        // 驗證必要欄位
-        if (!username || !email || !password) {
-            return res.status(400).json({
-                success: false,
-                error: '請填寫所有必要欄位'
-            });
-        }
-        
-        // 檢查電子郵件是否已驗證
-        const verification = database.email_verifications.find(
-            v => v.email === email && v.verified
-        );
-        if (!verification) {
-            return res.status(400).json({
-                success: false,
-                error: '請先驗證電子郵件'
-            });
-        }
-        
-        // 檢查用戶名是否已存在
-        const existingUser = database.staff_accounts.find(staff => 
-            staff.username === username || staff.email === email
-        );
-        if (existingUser) {
-            return res.status(400).json({
-                success: false,
-                error: '用戶名或電子郵件已存在'
-            });
-        }
-        
-        // 密碼加密
-        const hash = await new Promise((resolve, reject) => {
-            bcrypt.hash(password, 10, (err, hash) => {
-                if (err) reject(err);
-                else resolve(hash);
-            });
-        });
-        
-        // 創建新用戶
-        const newUser = {
-            id: database.staff_accounts.length + 1,
-            username: username,
-            password: hash,
-            name: username, // 預設使用用戶名作為顯示名稱
-            role: 'user',
-            email: email,
-            created_at: new Date().toISOString()
-        };
-        
-        database.staff_accounts.push(newUser);
-        saveDatabase();
-        
-        console.log('✅ 新用戶註冊成功:', username);
-        
-        res.json({
-            success: true,
-            message: '註冊成功'
-        });
-        
-    } catch (error) {
-        console.error('註冊錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '註冊過程發生錯誤'
-        });
-    }
-});
-
-// 獲取個人資料 API
-app.get('/api/profile', authenticateJWT, (req, res) => {
-    try {
-        res.json({
-            success: true,
-            profile: {
-                id: req.staff.id,
-                username: req.staff.username,
-                name: req.staff.name,
-                role: req.staff.role
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: '獲取個人資料失敗'
-        });
-    }
-});
-
-// 更新個人資料 API
-app.post('/api/profile', authenticateJWT, (req, res) => {
-    try {
-        const { name, email } = req.body;
-        
-        if (!name) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供顯示名稱'
-            });
-        }
-
-        // 這裡原本是使用 sqlite3，需要改為直接操作 database 物件
-        // db.run("UPDATE staff SET name = ? WHERE id = ?", [name, req.staff.id], function(err) {
-        //     if (err) {
-        //         return res.status(500).json({
-        //             success: false,
-        //             error: '更新個人資料失敗'
-        //         });
-        //     }
-
-        //     res.json({
-        //         success: true,
-        //         message: '個人資料已更新'
-        //     });
-        // });
-        // 暫時使用內存資料庫，實際應用需要持久化
-        const staff = findStaffById(req.staff.id);
-        if (staff) {
-            staff.name = name;
-            saveDatabase();
-            res.json({
-                success: true,
-                message: '個人資料已更新'
-            });
-        } else {
-            res.status(404).json({
-                success: false,
-                error: '用戶不存在'
-            });
-        }
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: '更新個人資料失敗'
-        });
-    }
-});
-
-// 修改密碼 API
-app.post('/api/change-password', authenticateJWT, async (req, res) => {
-    try {
-        const { oldPassword, newPassword } = req.body;
-        
-        if (!oldPassword || !newPassword) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供舊密碼和新密碼'
-            });
-        }
-
-        if (newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                error: '新密碼長度至少需要6個字元'
-            });
-        }
-
-        try {
-            const staff = findStaffById(req.staff.id);
-            
-            if (!staff) {
-                return res.status(404).json({
-                    success: false,
-                    error: '用戶不存在'
-                });
-            }
-
-            const isValidPassword = await bcrypt.compare(oldPassword, staff.password);
-            if (!isValidPassword) {
-                return res.status(401).json({
-                    success: false,
-                    error: '舊密碼錯誤'
-                });
-            }
-
-            const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-            const updated = updateStaffPassword(req.staff.id, hashedNewPassword);
-
-            if (updated) {
-                res.json({
-                    success: true,
-                    message: '密碼已成功修改'
-                });
-            } else {
-                res.status(500).json({
-                    success: false,
-                    error: '修改密碼失敗'
-                });
-            }
-        } catch (error) {
-            console.error('修改密碼錯誤:', error);
-            return res.status(500).json({
-                success: false,
-                error: '修改密碼失敗'
-            });
-        }
-    } catch (error) {
-        console.error('修改密碼錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '修改密碼失敗'
-        });
-    }
-});
-
-// 刪除帳號 API
-app.post('/api/delete-account', authenticateJWT, async (req, res) => {
-    try {
-        const { password } = req.body;
-        
-        if (!password) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供密碼'
-            });
-        }
-
-        try {
-            const staff = findStaffById(req.staff.id);
-            
-            if (!staff) {
-                return res.status(404).json({
-                    success: false,
-                    error: '用戶不存在'
-                });
-            }
-
-            const isValidPassword = await bcrypt.compare(password, staff.password);
-            if (!isValidPassword) {
-                return res.status(401).json({
-                    success: false,
-                    error: '密碼錯誤'
-                });
-            }
-
-            const deleted = deleteStaffById(req.staff.id);
-
-            if (deleted) {
-                res.json({
-                    success: true,
-                    message: '帳號已成功刪除'
-                });
-            } else {
-                res.status(404).json({
-                    success: false,
-                    error: '帳號不存在'
-                });
-            }
-        } catch (error) {
-            console.error('刪除帳號錯誤:', error);
-            res.status(500).json({
-                success: false,
-                error: '刪除帳號失敗'
-            });
-        }
-    } catch (error) {
-        console.error('刪除帳號錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '刪除帳號失敗'
-        });
-    }
-});
-
 // 忘記密碼 API - 發送驗證碼
 app.post('/api/forgot-password', async (req, res) => {
     try {
@@ -1177,21 +429,10 @@ app.post('/api/forgot-password', async (req, res) => {
                 message: '驗證碼已發送到您的電子郵件'
             });
         } catch (emailError) {
-<<<<<<< HEAD
-            console.log('⚠️ 電子郵件發送失敗，但驗證碼已生成:', verificationCode);
-            console.error('📧 詳細錯誤信息:', emailError);
-            
-            // 郵件發送失敗時，返回驗證碼作為備案
-            res.json({
-                success: true,
-                message: '驗證碼已生成（郵件服務暫時不可用）',
-                code: verificationCode
-=======
             console.error('發送密碼重設郵件失敗:', emailError);
             res.status(500).json({
                 success: false,
                 error: '發送驗證碼失敗，請稍後再試'
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
             });
         }
     } catch (error) {
@@ -1391,72 +632,66 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     }
 });
 
-<<<<<<< HEAD
-// 獲取所有可用的 AI 模型資訊
-app.get('/api/ai-models', authenticateJWT, (req, res) => {
+// 強制初始化 API
+app.post('/api/init-database', async (req, res) => {
     try {
-        const models = {
-            'gpt-3.5-turbo': {
-                name: 'GPT-3.5 Turbo',
-                provider: 'OpenAI',
-                description: '快速且經濟實惠的對話體驗，適合一般客服需求',
-                features: ['快速回應', '成本效益高', '支援多語言', '適合日常對話'],
-                pricing: '經濟實惠',
-                speed: '快速',
-                max_tokens: 16385,
-                supported_languages: ['中文', '英文', '日文', '韓文', '法文', '德文', '西班牙文']
-            },
-            'gpt-4-turbo': {
-                name: 'GPT-4 Turbo',
-                provider: 'OpenAI',
-                description: '高級版本，提供更強大的理解和生成能力',
-                features: ['高品質回應', '複雜任務處理', '創意內容生成', '深度理解'],
-                pricing: '中等',
-                speed: '中等',
-                max_tokens: 128000,
-                supported_languages: ['中文', '英文', '日文', '韓文', '法文', '德文', '西班牙文']
-            },
-            'gpt-4-turbo': {
-                name: 'GPT-4 Turbo',
-                provider: 'OpenAI',
-                description: '平衡效能和速度的優化版本',
-                features: ['平衡效能', '快速處理', '高品質輸出', '廣泛應用'],
-                pricing: '中等',
-                speed: '快速',
-                max_tokens: 128000,
-                supported_languages: ['中文', '英文', '日文', '韓文', '法文', '德文', '西班牙文']
-            },
-            'gpt-3.5-turbo': {
-                name: 'GPT-3.5 Turbo',
-                provider: 'OpenAI',
-                description: '經典版本，穩定可靠且成本較低',
-                features: ['穩定可靠', '成本較低', '快速回應', '廣泛支援'],
-                pricing: '經濟實惠',
-                speed: '快速',
-                max_tokens: 16385,
-                supported_languages: ['中文', '英文', '日文', '韓文', '法文', '德文', '西班牙文']
-            },
-            'gpt-3.5-turbo-16k': {
-                name: 'GPT-3.5 Turbo 16K',
-                provider: 'OpenAI',
-                description: '支援更長對話的擴展版本',
-                features: ['長對話支援', '大上下文', '穩定效能', '適合複雜對話'],
-                pricing: '中等',
-                speed: '中等',
-                max_tokens: 16385,
-                supported_languages: ['中文', '英文', '日文', '韓文', '法文', '德文', '西班牙文']
-            }
-        };
+        console.log('🔧 強制初始化資料庫...');
         
-        res.json({
-            success: true,
-            models: models
-        });
+        // 重新載入資料庫
+        loadDatabase();
+        
+        // 檢查管理員帳號是否存在
+        const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
+        if (!adminExists) {
+            // 創建管理員帳號
+            const adminPassword = 'gele1227';
+            const hash = await new Promise((resolve, reject) => {
+                bcrypt.hash(adminPassword, 10, (err, hash) => {
+                    if (err) reject(err);
+                    else resolve(hash);
+                });
+            });
+            
+            const adminAccount = {
+                id: database.staff_accounts.length + 1,
+                username: 'sunnyharry1',
+                password: hash,
+                name: '系統管理員',
+                role: 'admin',
+                email: '',
+                created_at: new Date().toISOString()
+            };
+            
+            database.staff_accounts.push(adminAccount);
+            saveDatabase();
+            
+            console.log('✅ 管理員帳號已創建');
+            console.log('📧 帳號: sunnyharry1');
+            console.log('🔑 密碼: gele1227');
+            
+            res.json({
+                success: true,
+                message: '資料庫初始化成功',
+                adminCreated: true,
+                adminAccount: {
+                    username: 'sunnyharry1',
+                    password: 'gele1227'
+                }
+            });
+        } else {
+            console.log('ℹ️ 管理員帳號已存在');
+            res.json({
+                success: true,
+                message: '資料庫已初始化',
+                adminCreated: false
+            });
+        }
     } catch (error) {
-        console.error('獲取 AI 模型資訊錯誤:', error);
+        console.error('❌ 強制初始化失敗:', error);
         res.status(500).json({
             success: false,
-            error: '獲取模型資訊失敗'
+            error: '資料庫初始化失敗',
+            details: error.message
         });
     }
 });
@@ -1670,363 +905,6 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
     }
 });
 
-// 獲取對話歷史 API 端點
-app.get('/api/conversations', authenticateJWT, (req, res) => {
-    try {
-        loadDatabase();
-        const conversations = database.chat_history || [];
-        
-        // 為每個對話添加統計資訊
-        const conversationsWithStats = conversations.map(conv => ({
-            ...conv,
-            messageCount: conv.messages ? conv.messages.length : 0,
-            lastMessage: conv.messages && conv.messages.length > 0 
-                ? conv.messages[conv.messages.length - 1].content.substring(0, 100) + '...'
-                : '無訊息'
-        }));
-
-        res.json({
-            success: true,
-            conversations: conversationsWithStats
-        });
-    } catch (error) {
-        console.error('獲取對話歷史錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '獲取對話歷史失敗'
-        });
-    }
-});
-
-// 獲取特定對話的詳細訊息
-app.get('/api/conversations/:conversationId', authenticateJWT, (req, res) => {
-    try {
-        const { conversationId } = req.params;
-        loadDatabase();
-        
-        const conversation = database.chat_history.find(conv => conv.id === conversationId);
-        
-        if (!conversation) {
-            return res.status(404).json({
-                success: false,
-                error: '對話不存在'
-            });
-        }
-
-        res.json({
-            success: true,
-            conversation: conversation
-        });
-    } catch (error) {
-        console.error('獲取對話詳情錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '獲取對話詳情失敗'
-        });
-    }
-});
-
-// 刪除對話
-app.delete('/api/conversations/:conversationId', authenticateJWT, (req, res) => {
-    try {
-        const { conversationId } = req.params;
-        loadDatabase();
-        
-        const conversationIndex = database.chat_history.findIndex(conv => conv.id === conversationId);
-        
-        if (conversationIndex === -1) {
-            return res.status(404).json({
-                success: false,
-                error: '對話不存在'
-            });
-        }
-
-        database.chat_history.splice(conversationIndex, 1);
-        saveDatabase();
-
-        res.json({
-            success: true,
-            message: '對話已成功刪除'
-        });
-    } catch (error) {
-        console.error('刪除對話錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '刪除對話失敗'
-        });
-    }
-});
-
-// 獲取用戶的 LINE Token 配置
-app.get('/api/line-token', authenticateJWT, (req, res) => {
-    try {
-        loadDatabase();
-        
-        const user = database.staff_accounts.find(staff => staff.id === req.staff.id);
-        
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                error: '用戶不存在'
-            });
-        }
-
-        res.json({
-            success: true,
-            line_token: user.line_token || {}
-        });
-    } catch (error) {
-        console.error('獲取 LINE Token 配置錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '獲取 LINE Token 配置失敗'
-        });
-    }
-});
-
-// 更新用戶的 LINE Token 配置
-app.post('/api/line-token', authenticateJWT, (req, res) => {
-    try {
-        const { channel_access_token, channel_secret, enabled } = req.body;
-        loadDatabase();
-        
-        const userIndex = database.staff_accounts.findIndex(staff => staff.id === req.staff.id);
-        
-        if (userIndex === -1) {
-            return res.status(404).json({
-                success: false,
-                error: '用戶不存在'
-            });
-        }
-
-        // 更新 LINE Token 配置
-        database.staff_accounts[userIndex].line_token = {
-            channel_access_token: channel_access_token || '',
-            channel_secret: channel_secret || '',
-            enabled: enabled || false,
-            updated_at: new Date().toISOString()
-        };
-
-        saveDatabase();
-
-        console.log('✅ LINE Token 配置更新成功:', req.staff.username);
-
-        res.json({
-            success: true,
-            message: 'LINE Token 配置更新成功'
-        });
-    } catch (error) {
-        console.error('更新 LINE Token 配置錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '更新 LINE Token 配置失敗'
-        });
-    }
-});
-
-// LINE Webhook 端點 - 個人用戶
-app.post('/api/webhook/line/:userId', (req, res) => {
-    try {
-        const { userId } = req.params;
-        loadDatabase();
-        
-        const user = database.staff_accounts.find(staff => staff.id == userId);
-        
-        if (!user || !user.line_token || !user.line_token.enabled) {
-            return res.status(404).json({
-                success: false,
-                error: '用戶或 LINE Token 配置不存在'
-            });
-        }
-
-        const { channel_access_token, channel_secret } = user.line_token;
-        
-        if (!channel_access_token || !channel_secret) {
-            return res.status(400).json({
-                success: false,
-                error: 'LINE Token 配置不完整'
-            });
-        }
-
-        // 建立 LINE 客戶端
-        const lineClient = new Client({
-            channelAccessToken: channel_access_token,
-            channelSecret: channel_secret
-        });
-
-        // 處理 LINE 事件
-        const events = req.body.events;
-        
-        Promise.all(events.map(async (event) => {
-            if (event.type === 'message' && event.message.type === 'text') {
-                const userMessage = event.message.text;
-                
-                // 調用 AI 聊天 API
-                try {
-                    const aiResponse = await axios.post(`${req.protocol}://${req.get('host')}/api/chat`, {
-                        message: userMessage,
-                        conversationId: `line_${event.source.userId}_${Date.now()}`,
-                        userId: userId
-                    }, {
-                        headers: {
-                            'Content-Type': 'application/json'
-                        }
-                    });
-
-                    if (aiResponse.data.success) {
-                        // 回覆 LINE 用戶
-                        await lineClient.replyMessage(event.replyToken, {
-                            type: 'text',
-                            text: aiResponse.data.reply
-                        });
-                    }
-                } catch (error) {
-                    console.error('LINE AI 回應錯誤:', error);
-                    // 回覆預設訊息
-                    await lineClient.replyMessage(event.replyToken, {
-                        type: 'text',
-                        text: '抱歉，我現在無法回應，請稍後再試。'
-                    });
-                }
-            }
-        }));
-
-        res.json({ success: true });
-    } catch (error) {
-        console.error('LINE Webhook 錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: 'LINE Webhook 處理失敗'
-        });
-    }
-});
-
-// 簡化的 LINE Webhook 端點 - 無需驗證
-app.post('/api/webhook/line-simple', (req, res) => {
-    try {
-        console.log('📨 收到 LINE Webhook 事件:', req.body);
-        
-        // 處理 LINE 事件
-        const events = req.body.events;
-        
-        if (!events || events.length === 0) {
-            return res.json({ success: true, message: '無事件需要處理' });
-        }
-
-        Promise.all(events.map(async (event) => {
-            if (event.type === 'message' && event.message.type === 'text') {
-                const userMessage = event.message.text;
-                console.log('💬 收到 LINE 訊息:', userMessage);
-                
-                // 簡單的回應邏輯
-                let replyMessage = '您好！我是 EchoChat AI 助手。';
-                
-                if (userMessage.includes('你好') || userMessage.includes('hello')) {
-                    replyMessage = '您好！很高興為您服務。';
-                } else if (userMessage.includes('幫助') || userMessage.includes('help')) {
-                    replyMessage = '我可以協助您了解 EchoChat 的功能，包括 AI 客服、多平台串接等服務。';
-                } else if (userMessage.includes('價格') || userMessage.includes('費用')) {
-                    replyMessage = '我們提供多種訂閱方案，請訪問我們的網站了解詳細價格。';
-                } else {
-                    replyMessage = `感謝您的訊息：「${userMessage}」。我是 AI 助手，正在學習中。`;
-                }
-                
-                // 使用預設的 LINE 配置回應
-                try {
-                    const defaultLineClient = new Client({
-                        channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || '',
-                        channelSecret: process.env.LINE_CHANNEL_SECRET || ''
-                    });
-                    
-                    await defaultLineClient.replyMessage(event.replyToken, {
-                        type: 'text',
-                        text: replyMessage
-                    });
-                    
-                    console.log('✅ 已回覆 LINE 訊息:', replyMessage);
-                } catch (error) {
-                    console.error('❌ LINE 回應錯誤:', error);
-                }
-            }
-        }));
-
-        res.json({ success: true, message: 'Webhook 處理完成' });
-    } catch (error) {
-        console.error('❌ LINE Webhook 錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: 'LINE Webhook 處理失敗'
-        });
-    }
-});
-
-<<<<<<< HEAD
-=======
-// 強制初始化 API
-app.post('/api/init-database', async (req, res) => {
-    try {
-        console.log('🔧 強制初始化資料庫...');
-        
-        // 重新載入資料庫
-        loadDatabase();
-        
-        // 檢查管理員帳號是否存在
-        const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
-        if (!adminExists) {
-            // 創建管理員帳號
-            const adminPassword = 'gele1227';
-            const hash = await new Promise((resolve, reject) => {
-                bcrypt.hash(adminPassword, 10, (err, hash) => {
-                    if (err) reject(err);
-                    else resolve(hash);
-                });
-            });
-            
-            const adminAccount = {
-                id: database.staff_accounts.length + 1,
-                username: 'sunnyharry1',
-                password: hash,
-                name: '系統管理員',
-                role: 'admin',
-                email: '',
-                created_at: new Date().toISOString()
-            };
-            
-            database.staff_accounts.push(adminAccount);
-            saveDatabase();
-            
-            console.log('✅ 管理員帳號已創建');
-            console.log('📧 帳號: sunnyharry1');
-            console.log('🔑 密碼: gele1227');
-            
-            res.json({
-                success: true,
-                message: '資料庫初始化成功',
-                adminCreated: true,
-                adminAccount: {
-                    username: 'sunnyharry1',
-                    password: 'gele1227'
-                }
-            });
-        } else {
-            console.log('ℹ️ 管理員帳號已存在');
-            res.json({
-                success: true,
-                message: '資料庫已初始化',
-                adminCreated: false
-            });
-        }
-    } catch (error) {
-        console.error('❌ 強制初始化失敗:', error);
-        res.status(500).json({
-            success: false,
-            error: '資料庫初始化失敗',
-            details: error.message
-        });
-    }
-});
-
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
     res.json({
@@ -2046,8 +924,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-<<<<<<< HEAD
-=======
 // ==================== AI 模型 API ====================
 
 // AI 模型列表端點 - 不需要認證
@@ -2858,7 +1734,6 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
     }
 });
 
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
 // 錯誤處理中間件
 const errorHandler = (err, req, res, next) => {
     console.error('❌ 伺服器錯誤:', err);
