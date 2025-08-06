@@ -1368,6 +1368,26 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             });
         }
 
+        // 檢查 OpenAI API Key 是否存在
+        if (!process.env.OPENAI_API_KEY) {
+            console.error('OpenAI API Key 未設置');
+            return res.status(500).json({
+                success: false,
+                error: 'AI 服務尚未配置，請聯繫管理員設置 OpenAI API Key',
+                details: 'OPENAI_API_KEY 環境變數未設置'
+            });
+        }
+
+        // 驗證 API Key 格式
+        if (!process.env.OPENAI_API_KEY.startsWith('sk-')) {
+            console.error('OpenAI API Key 格式無效');
+            return res.status(500).json({
+                success: false,
+                error: 'AI 服務配置錯誤，請檢查 API Key 格式',
+                details: 'OpenAI API Key 應以 sk- 開頭'
+            });
+        }
+
         // 載入資料庫
         loadDatabase();
         
@@ -1479,28 +1499,68 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
 
     } catch (error) {
         console.error('AI 聊天錯誤:', error);
+        console.error('錯誤詳情:', {
+            message: error.message,
+            response: error.response ? {
+                status: error.response.status,
+                data: error.response.data
+            } : null,
+            code: error.code
+        });
         
         // 檢查是否為 OpenAI API 錯誤
-        if (error.response && error.response.status === 401) {
-            return res.status(500).json({
-                success: false,
-                error: 'OpenAI API 金鑰無效或已過期'
-            });
-        } else if (error.response && error.response.status === 429) {
-            return res.status(500).json({
-                success: false,
-                error: 'OpenAI API 請求頻率過高，請稍後再試'
-            });
+        if (error.response) {
+            if (error.response.status === 401) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'OpenAI API 金鑰無效或已過期',
+                    details: '請檢查 OPENAI_API_KEY 環境變數是否正確',
+                    solution: '請運行 node update-render-env-openai.js 更新 API Key'
+                });
+            } else if (error.response.status === 429) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'OpenAI API 請求頻率過高',
+                    details: '已達到 API 使用限制',
+                    solution: '請稍後再試或升級 OpenAI 計劃'
+                });
+            } else if (error.response.status === 403) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'OpenAI API 存取被拒絕',
+                    details: '可能是帳戶問題或 API Key 權限不足',
+                    solution: '請檢查 OpenAI 帳戶狀態'
+                });
+            } else if (error.response.status === 400) {
+                return res.status(500).json({
+                    success: false,
+                    error: 'OpenAI API 請求參數錯誤',
+                    details: error.response.data?.error?.message || '請求格式不正確',
+                    solution: '請檢查模型名稱和請求參數'
+                });
+            }
         } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
             return res.status(500).json({
                 success: false,
-                error: '無法連接到 OpenAI 服務，請檢查網路連接'
+                error: '無法連接到 OpenAI 服務',
+                details: `網路錯誤: ${error.code}`,
+                solution: '請檢查網路連接或稍後再試'
+            });
+        } else if (error.message && error.message.includes('API key')) {
+            return res.status(500).json({
+                success: false,
+                error: 'OpenAI API Key 配置問題',
+                details: error.message,
+                solution: '請運行 node update-render-env-openai.js 設置 API Key'
             });
         }
 
+        // 一般錯誤
         res.status(500).json({
             success: false,
-            error: 'AI 回應生成失敗，請稍後再試'
+            error: 'AI 回應生成失敗',
+            details: error.message || '未知錯誤',
+            solution: '請檢查伺服器日誌或聯繫技術支援'
         });
     }
 });
