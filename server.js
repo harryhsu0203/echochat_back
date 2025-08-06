@@ -156,11 +156,67 @@ app.get('/api/env-check', (req, res) => {
         DATA_DIR: process.env.DATA_DIR
     };
     
+    // 添加詳細的 OpenAI API 金鑰檢查
+    const openaiKeyStatus = {
+        exists: !!process.env.OPENAI_API_KEY,
+        length: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.length : 0,
+        startsWith: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 7) : 'N/A',
+        isValid: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.startsWith('sk-') : false
+    };
+    
+    // 添加詳細的 JWT_SECRET 檢查
+    const jwtSecretStatus = {
+        exists: !!process.env.JWT_SECRET,
+        length: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
+        isDefault: !process.env.JWT_SECRET || process.env.JWT_SECRET === 'echochat-jwt-secret-key-2024',
+        value: process.env.JWT_SECRET ? process.env.JWT_SECRET.substring(0, 10) + '...' : 'N/A'
+    };
+    
     res.json({
         success: true,
         message: '環境變數檢查',
         envVars: envVars,
+        openaiKeyStatus: openaiKeyStatus,
+        jwtSecretStatus: jwtSecretStatus,
         timestamp: new Date().toISOString()
+    });
+});
+
+// 測試端點 - 用於診斷認證問題
+app.get('/api/test-auth', (req, res) => {
+    const authHeader = req.headers.authorization;
+    const token = authHeader ? authHeader.split(' ')[1] : null;
+    
+    const testResult = {
+        hasAuthHeader: !!authHeader,
+        hasToken: !!token,
+        tokenLength: token ? token.length : 0,
+        jwtSecretExists: !!process.env.JWT_SECRET,
+        jwtSecretLength: process.env.JWT_SECRET ? process.env.JWT_SECRET.length : 0,
+        timestamp: new Date().toISOString()
+    };
+    
+    if (token) {
+        try {
+            const decoded = jwt.verify(token, JWT_SECRET);
+            testResult.tokenValid = true;
+            testResult.decodedToken = {
+                id: decoded.id,
+                username: decoded.username,
+                role: decoded.role,
+                iat: decoded.iat,
+                exp: decoded.exp
+            };
+        } catch (error) {
+            testResult.tokenValid = false;
+            testResult.tokenError = error.message;
+        }
+    }
+    
+    res.json({
+        success: true,
+        message: '認證測試結果',
+        testResult: testResult
     });
 });
 
@@ -210,17 +266,52 @@ const authenticateJWT = (req, res, next) => {
         }
 
         const token = authHeader.split(' ')[1];
+        if (!token) {
+            return res.status(401).json({
+                success: false,
+                error: '認證令牌格式錯誤'
+            });
+        }
+
+        // 檢查 JWT_SECRET 是否正確設置
+        if (!process.env.JWT_SECRET) {
+            console.error('⚠️ JWT_SECRET 未正確設置:', {
+                hasEnvVar: !!process.env.JWT_SECRET,
+                value: process.env.JWT_SECRET ? '已設置' : '未設置'
+            });
+        }
+
         jwt.verify(token, JWT_SECRET, (err, staff) => {
             if (err) {
-                return res.status(403).json({
-                    success: false,
-                    error: '無效的認證令牌'
+                console.error('❌ JWT 驗證失敗:', {
+                    error: err.message,
+                    name: err.name,
+                    jwtSecretExists: !!process.env.JWT_SECRET,
+                    tokenLength: token.length
                 });
+                
+                if (err.name === 'TokenExpiredError') {
+                    return res.status(403).json({
+                        success: false,
+                        error: '認證令牌已過期，請重新登入'
+                    });
+                } else if (err.name === 'JsonWebTokenError') {
+                    return res.status(403).json({
+                        success: false,
+                        error: '無效的認證令牌'
+                    });
+                } else {
+                    return res.status(403).json({
+                        success: false,
+                        error: '認證令牌驗證失敗'
+                    });
+                }
             }
             req.staff = staff;
             next();
         });
     } catch (error) {
+        console.error('認證過程發生錯誤:', error);
         return res.status(500).json({
             success: false,
             error: '認證過程發生錯誤'
@@ -467,6 +558,13 @@ app.post('/api/login', async (req, res) => {
                 { expiresIn: '24h' }
             );
 
+            console.log('✅ 登入成功，生成 Token:', {
+                username: staff.username,
+                role: staff.role,
+                jwtSecretExists: !!process.env.JWT_SECRET,
+                tokenLength: token.length
+            });
+
             res.json({
                 success: true,
                 token,
@@ -568,6 +666,14 @@ app.post('/api/auth/google', async (req, res) => {
                 { expiresIn: '24h' }
             );
 
+            console.log('✅ Google 登入成功，生成 Token:', {
+                username: user.username,
+                role: user.role,
+                email: user.email,
+                jwtSecretExists: !!process.env.JWT_SECRET,
+                tokenLength: token.length
+            });
+
             res.json({
                 success: true,
                 token,
@@ -598,8 +704,7 @@ app.post('/api/auth/google', async (req, res) => {
     }
 });
 
-=======
->>>>>>> 7cc48bb03ba666615158cb0ade060da31f546994
+
 // 驗證用戶身份 API
 app.get('/api/me', authenticateJWT, (req, res) => {
     try {
