@@ -228,6 +228,25 @@ const connectDatabase = async () => {
     try {
         loadDatabase();
         
+        // 確保既有帳號具備 plan 與 created_at 欄位
+        if (!Array.isArray(database.staff_accounts)) {
+            database.staff_accounts = [];
+        }
+        let didMutateForPlan = false;
+        database.staff_accounts.forEach(staff => {
+            if (!staff.plan) {
+                staff.plan = staff.role === 'admin' ? 'enterprise' : 'free';
+                didMutateForPlan = true;
+            }
+            if (!staff.created_at) {
+                staff.created_at = new Date().toISOString();
+                didMutateForPlan = true;
+            }
+        });
+        if (didMutateForPlan) {
+            saveDatabase();
+        }
+
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
@@ -248,7 +267,8 @@ const connectDatabase = async () => {
                     name: '系統管理員',
                     role: 'admin',
                     email: '',
-                    created_at: new Date().toISOString()
+                    created_at: new Date().toISOString(),
+                    plan: 'enterprise'
                 };
                 
                 database.staff_accounts.push(adminAccount);
@@ -342,7 +362,8 @@ app.post('/api/login', async (req, res) => {
                     id: staff.id, 
                     username: staff.username, 
                     name: staff.name, 
-                    role: staff.role 
+                    role: staff.role,
+                    plan: staff.plan || 'free'
                 },
                 JWT_SECRET,
                 { expiresIn: '24h' }
@@ -362,7 +383,8 @@ app.post('/api/login', async (req, res) => {
                     id: staff.id,
                     username: staff.username,
                     name: staff.name,
-                    role: staff.role
+                    role: staff.role,
+                    plan: staff.plan || 'free'
                 }
             });
         } catch (error) {
@@ -457,7 +479,8 @@ app.get('/api/me', authenticateJWT, (req, res) => {
                 id: user.id,
                 username: user.username,
                 name: user.name,
-                role: user.role
+                role: user.role,
+                plan: user.plan || 'free'
             }
         });
     } catch (error) {
@@ -465,6 +488,20 @@ app.get('/api/me', authenticateJWT, (req, res) => {
             success: false,
             error: '伺服器錯誤'
         });
+    }
+});
+
+// 使用者自助升級至尊榮版（模擬付款流程）
+app.post('/api/upgrade', authenticateJWT, (req, res) => {
+    try {
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        // 簡化處理：此端點直接將方案升級為 premium，實際可串接金流後再變更
+        user.plan = 'premium';
+        saveDatabase();
+        return res.json({ success: true, message: '升級成功，已成為尊榮版', plan: user.plan });
+    } catch (error) {
+        return res.status(500).json({ success: false, error: '升級失敗' });
     }
 });
 
@@ -498,7 +535,9 @@ app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
             username: staff.username,
             name: staff.name,
             role: staff.role,
-            email: staff.email || ''
+            email: staff.email || '',
+            plan: staff.plan || 'free',
+            created_at: staff.created_at
         }));
         res.json({ success: true, accounts });
     } catch (error) {
@@ -508,7 +547,7 @@ app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
 
 app.post('/api/accounts', authenticateJWT, checkRole(['admin']), async (req, res) => {
     try {
-        const { username, password, name, role = 'user', email = '' } = req.body;
+        const { username, password, name, role = 'user', email = '', plan = 'free' } = req.body;
         if (!username || !password || !name) {
             return res.status(400).json({ success: false, error: '缺少必要欄位' });
         }
@@ -517,7 +556,7 @@ app.post('/api/accounts', authenticateJWT, checkRole(['admin']), async (req, res
         }
         const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
         const hashedPassword = await bcrypt.hash(password, 10);
-        const newUser = { id, username, password: hashedPassword, name, role, email };
+        const newUser = { id, username, password: hashedPassword, name, role, email, plan, created_at: new Date().toISOString() };
         database.staff_accounts.push(newUser);
         saveDatabase();
         // 不回傳密碼
@@ -533,10 +572,11 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         const id = parseInt(req.params.id);
         const user = database.staff_accounts.find(u => u.id === id);
         if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
-        const { name, role, password, email } = req.body;
+        const { name, role, password, email, plan } = req.body;
         if (name !== undefined) user.name = name;
         if (role !== undefined) user.role = role;
         if (email !== undefined) user.email = email;
+        if (plan !== undefined) user.plan = plan;
         if (password) {
             user.password = await bcrypt.hash(password, 10);
         }
@@ -566,7 +606,8 @@ app.get('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) =
         const id = parseInt(req.params.id);
         const user = database.staff_accounts.find(u => u.id === id);
         if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
-        res.json({ success: true, account: user });
+        const { password: _, ...safeUser } = user;
+        res.json({ success: true, account: safeUser });
     } catch (error) {
         res.status(500).json({ success: false, error: '無法取得帳號' });
     }
