@@ -382,9 +382,10 @@ app.post('/api/login', async (req, res) => {
 });
 
 // 知識庫 API（使用 JSON 檔儲存）
+// 僅回傳屬於自己的知識庫（或未綁定者可選擇是否可見，這裡預設僅本人）
 app.get('/api/knowledge', authenticateJWT, (req, res) => {
     try {
-        const items = database.knowledge || [];
+        const items = (database.knowledge || []).filter(k => !k.user_id || k.user_id === req.staff.id);
         res.json(items);
     } catch (error) {
         res.status(500).json({ success: false, error: '無法讀取知識庫' });
@@ -421,7 +422,7 @@ app.post('/api/knowledge', authenticateJWT, (req, res) => {
 app.delete('/api/knowledge/:id', authenticateJWT, (req, res) => {
     try {
         const id = parseInt(req.params.id);
-        const idx = (database.knowledge || []).findIndex(k => k.id === id);
+        const idx = (database.knowledge || []).findIndex(k => k.id === id && (k.user_id === req.staff.id));
         if (idx === -1) return res.status(404).json({ success: false, error: '項目不存在' });
         const removed = database.knowledge.splice(idx, 1)[0];
         saveDatabase();
