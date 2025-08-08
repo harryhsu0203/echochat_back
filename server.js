@@ -381,6 +381,56 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// 知識庫 API（使用 JSON 檔儲存）
+app.get('/api/knowledge', authenticateJWT, (req, res) => {
+    try {
+        const items = database.knowledge || [];
+        res.json(items);
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法讀取知識庫' });
+    }
+});
+
+app.post('/api/knowledge', authenticateJWT, (req, res) => {
+    try {
+        const { question, answer, category = 'general', tags = '' } = req.body || {};
+        if (!question || !answer) {
+            return res.status(400).json({ success: false, error: '缺少必要欄位' });
+        }
+        const id = database.knowledge && database.knowledge.length
+            ? Math.max(...database.knowledge.map(k => k.id || 0)) + 1
+            : 1;
+        const item = {
+            id,
+            question,
+            answer,
+            category,
+            tags,
+            created_at: new Date().toISOString(),
+            user_id: req.staff?.id || null
+        };
+        if (!database.knowledge) database.knowledge = [];
+        database.knowledge.push(item);
+        saveDatabase();
+        res.json({ success: true, item });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '新增知識失敗' });
+    }
+});
+
+app.delete('/api/knowledge/:id', authenticateJWT, (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const idx = (database.knowledge || []).findIndex(k => k.id === id);
+        if (idx === -1) return res.status(404).json({ success: false, error: '項目不存在' });
+        const removed = database.knowledge.splice(idx, 1)[0];
+        saveDatabase();
+        res.json({ success: true, item: removed });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '刪除知識失敗' });
+    }
+});
+
 // 取得目前使用者資訊
 app.get('/api/me', authenticateJWT, (req, res) => {
     try {
