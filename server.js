@@ -2104,6 +2104,308 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
     }
 });
 
+// ==================== LINE API 設定與 Webhook ====================
+
+// LINE API 設定儲存 (用戶專用)
+let lineAPISettings = {}; // 格式: { userId: { channelAccessToken, channelSecret, webhookUrl } }
+
+// 獲取 LINE API 設定
+app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const settings = lineAPISettings[userId] || {};
+        
+        res.json({
+            success: true,
+            data: {
+                channelAccessToken: settings.channelAccessToken || '',
+                channelSecret: settings.channelSecret || '',
+                webhookUrl: settings.webhookUrl || ''
+            }
+        });
+    } catch (error) {
+        console.error('獲取 LINE API 設定錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取 LINE API 設定失敗'
+        });
+    }
+});
+
+// 保存 LINE API 設定
+app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const { channelAccessToken, channelSecret, webhookUrl } = req.body;
+        
+        if (!channelAccessToken || !channelSecret) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供 Channel Access Token 和 Channel Secret'
+            });
+        }
+        
+        // 保存設定
+        lineAPISettings[userId] = {
+            channelAccessToken,
+            channelSecret,
+            webhookUrl: webhookUrl || `${req.protocol}://${req.get('host')}/api/webhook/line/${userId}`,
+            updatedAt: new Date().toISOString()
+        };
+        
+        res.json({
+            success: true,
+            message: 'LINE API 設定保存成功',
+            data: lineAPISettings[userId]
+        });
+    } catch (error) {
+        console.error('保存 LINE API 設定錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '保存 LINE API 設定失敗'
+        });
+    }
+});
+
+// 獲取用戶的 Webhook URL
+app.get('/api/user/webhook-url', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const webhookUrl = `${req.protocol}://${req.get('host')}/api/webhook/line/${userId}`;
+        
+        res.json({
+            success: true,
+            data: {
+                webhookUrl: webhookUrl,
+                userId: userId
+            }
+        });
+    } catch (error) {
+        console.error('獲取 Webhook URL 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取 Webhook URL 失敗'
+        });
+    }
+});
+
+// 更新用戶的 Webhook URL
+app.post('/api/user/webhook-url', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const { webhookUrl } = req.body;
+        
+        if (lineAPISettings[userId]) {
+            lineAPISettings[userId].webhookUrl = webhookUrl;
+            lineAPISettings[userId].updatedAt = new Date().toISOString();
+        }
+        
+        res.json({
+            success: true,
+            message: 'Webhook URL 更新成功',
+            data: {
+                webhookUrl: webhookUrl,
+                userId: userId
+            }
+        });
+    } catch (error) {
+        console.error('更新 Webhook URL 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '更新 Webhook URL 失敗'
+        });
+    }
+});
+
+// LINE Webhook 處理 (用戶專用)
+app.post('/api/webhook/line/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const events = req.body.events || [];
+        
+        console.log(`📨 收到 LINE Webhook: 用戶 ${userId}, 事件數量: ${events.length}`);
+        
+        // 處理每個事件
+        for (const event of events) {
+            console.log('📝 LINE 事件:', event.type);
+            
+            switch (event.type) {
+                case 'message':
+                    await handleLineMessage(event, userId);
+                    break;
+                case 'follow':
+                    await handleLineFollow(event, userId);
+                    break;
+                case 'unfollow':
+                    await handleLineUnfollow(event, userId);
+                    break;
+                default:
+                    console.log('🔄 未處理的事件類型:', event.type);
+            }
+        }
+        
+        res.json({ success: true, message: 'Webhook 處理完成' });
+    } catch (error) {
+        console.error('處理 LINE Webhook 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '處理 Webhook 失敗'
+        });
+    }
+});
+
+// 處理 LINE 訊息事件
+async function handleLineMessage(event, userId) {
+    try {
+        const message = event.message;
+        const sourceUserId = event.source.userId;
+        
+        console.log('💬 收到訊息:', message.text || message.type);
+        
+        // 這裡可以添加自動回應邏輯
+        // 例如：根據 AI 設定生成回應，保存訊息到資料庫等
+        
+        // 暫時只記錄訊息
+        loadDatabase();
+        if (!database.line_messages) {
+            database.line_messages = [];
+        }
+        
+        database.line_messages.push({
+            id: uuidv4(),
+            userId: userId,
+            sourceUserId: sourceUserId,
+            messageType: message.type,
+            messageText: message.text || '',
+            timestamp: new Date().toISOString(),
+            processed: false
+        });
+        
+        saveDatabase();
+        
+    } catch (error) {
+        console.error('處理 LINE 訊息錯誤:', error);
+    }
+}
+
+// 處理 LINE 關注事件
+async function handleLineFollow(event, userId) {
+    try {
+        const sourceUserId = event.source.userId;
+        console.log('👋 新用戶關注:', sourceUserId);
+        
+        // 發送歡迎訊息
+        const settings = lineAPISettings[userId];
+        if (settings && settings.channelAccessToken) {
+            try {
+                const lineClient = new Client({
+                    channelAccessToken: settings.channelAccessToken,
+                    channelSecret: settings.channelSecret
+                });
+                
+                await lineClient.pushMessage(sourceUserId, {
+                    type: 'text',
+                    text: '歡迎關注我們的官方帳號！有任何問題都可以隨時詢問。'
+                });
+                
+                console.log('✅ 歡迎訊息發送成功');
+            } catch (error) {
+                console.log('❌ 歡迎訊息發送失敗:', error);
+            }
+        }
+    } catch (error) {
+        console.error('處理 LINE 關注錯誤:', error);
+    }
+}
+
+// 處理 LINE 取消關注事件
+async function handleLineUnfollow(event, userId) {
+    try {
+        const sourceUserId = event.source.userId;
+        console.log('👋 用戶取消關注:', sourceUserId);
+    } catch (error) {
+        console.error('處理 LINE 取消關注錯誤:', error);
+    }
+}
+
+// 測試用 LINE API 端點（不需要認證）
+app.post('/api/test-line-api', async (req, res) => {
+    try {
+        const { channelAccessToken, channelSecret, testUserId } = req.body;
+        
+        if (!channelAccessToken || !channelSecret) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供 Channel Access Token 和 Channel Secret'
+            });
+        }
+        
+        // 測試連接
+        let isConnected = false;
+        let testResponse = null;
+        
+        try {
+            const testUrl = 'https://api.line.me/oauth2/v2.1/verify';
+            testResponse = await axios.get(testUrl, {
+                headers: {
+                    'Authorization': `Bearer ${channelAccessToken}`
+                }
+            });
+            isConnected = testResponse.status === 200;
+        } catch (error) {
+            isConnected = false;
+            testResponse = error.response || { status: 'error' };
+        }
+        
+        // 測試發送訊息（如果提供了測試用戶 ID）
+        let testMessageResult = null;
+        if (testUserId && isConnected) {
+            try {
+                const lineClient = new Client({
+                    channelAccessToken: channelAccessToken,
+                    channelSecret: channelSecret
+                });
+                
+                await lineClient.pushMessage(testUserId, {
+                    type: 'text',
+                    text: `LINE API 測試訊息 - ${new Date().toLocaleString()}`
+                });
+                
+                testMessageResult = {
+                    success: true,
+                    message: '測試訊息發送成功'
+                };
+            } catch (error) {
+                testMessageResult = {
+                    success: false,
+                    error: error.message
+                };
+            }
+        }
+        
+        const PORT = process.env.PORT || 3000;
+        res.json({
+            success: true,
+            data: {
+                connectionTest: {
+                    connected: isConnected,
+                    status: testResponse.status
+                },
+                messageTest: testMessageResult,
+                webhookUrl: `http://localhost:${PORT}/api/webhook/line/test`,
+                timestamp: new Date().toISOString()
+            }
+        });
+        
+    } catch (error) {
+        console.error('LINE API 測試錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '測試失敗'
+        });
+    }
+});
+
 // 錯誤處理中間件
 const errorHandler = (err, req, res, next) => {
     console.error('❌ 伺服器錯誤:', err);
