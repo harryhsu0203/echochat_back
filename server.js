@@ -495,8 +495,9 @@ app.get('/api/me', authenticateJWT, (req, res) => {
                 id: user.id,
                 username: user.username,
                 name: user.name,
-                role: user.role,
-                plan: user.plan || 'free'
+                    role: user.role,
+                    plan: user.plan || 'free',
+                    plan_expires_at: user.plan_expires_at || null
             }
         });
     } catch (error) {
@@ -561,10 +562,10 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
             created_at: new Date().toISOString()
         });
         saveDatabase();
-
+        
         // 回傳可自動送出的表單資料給前端
         return res.json({
-            success: true,
+                success: true,
             action: ECPAY_ACTION,
             params: {
                 ...orderParams,
@@ -619,8 +620,12 @@ app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (
             const user = findStaffById(payment.userId);
             if (user) {
                 user.plan = payment.plan;
+                // 設定到期（尊榮版預設 30 天）
+                const expires = new Date();
+                expires.setDate(expires.getDate() + 30);
+                user.plan_expires_at = expires.toISOString();
             }
-            saveDatabase();
+        saveDatabase();
         } else {
             payment.status = 'failed';
             saveDatabase();
@@ -650,7 +655,7 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
         return res.json(sampleConversations);
     } catch (error) {
             return res.status(500).json({
-                success: false,
+            success: false,
             error: '無法取得對話列表'
         });
     }
@@ -712,7 +717,7 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         saveDatabase();
         const { password: _, ...safeUser } = user;
         res.json({ success: true, account: safeUser });
-    } catch (error) {
+        } catch (error) {
         res.status(500).json({ success: false, error: '無法更新帳號' });
     }
 });
@@ -737,7 +742,7 @@ app.get('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) =
         if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
         const { password: _, ...safeUser } = user;
         res.json({ success: true, account: safeUser });
-    } catch (error) {
+        } catch (error) {
         res.status(500).json({ success: false, error: '無法取得帳號' });
     }
 });
