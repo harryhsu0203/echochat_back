@@ -252,7 +252,7 @@ const connectDatabase = async () => {
                 };
                 
                 database.staff_accounts.push(adminAccount);
-                saveDatabase();
+            saveDatabase();
                 
                 console.log('✅ 管理員帳號已創建');
                 console.log('📧 帳號: sunnyharry1');
@@ -377,6 +377,64 @@ app.post('/api/login', async (req, res) => {
         res.status(500).json({
             success: false,
             error: '登入過程發生錯誤'
+        });
+    }
+});
+
+// 取得目前使用者資訊
+app.get('/api/me', authenticateJWT, (req, res) => {
+    try {
+        const currentStaffId = req.staff && req.staff.id ? req.staff.id : null;
+        if (!currentStaffId) {
+            return res.status(401).json({
+                success: false,
+                error: '未授權'
+            });
+        }
+
+        const user = findStaffById(currentStaffId);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                error: '用戶不存在'
+            });
+        }
+        
+        return res.json({
+            success: true,
+            user: {
+                id: user.id,
+                username: user.username,
+                name: user.name,
+                role: user.role
+            }
+        });
+    } catch (error) {
+        return res.status(500).json({
+            success: false,
+            error: '伺服器錯誤'
+        });
+    }
+});
+
+// 對話列表（最小可用實作）
+app.get('/api/conversations', authenticateJWT, (req, res) => {
+    try {
+        const sampleConversations = [
+            {
+                id: 1,
+                user: '訪客A',
+                lastMessage: '您好，想了解方案價格',
+                timestamp: new Date().toISOString(),
+                status: 'open',
+                tags: []
+            }
+        ];
+        return res.json(sampleConversations);
+    } catch (error) {
+            return res.status(500).json({
+                success: false,
+            error: '無法取得對話列表'
         });
     }
 });
@@ -536,7 +594,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         // 獲取第一個配置，如果沒有則返回預設值
         const config = database.ai_assistant_config[0] || {
             assistant_name: '設計師 Rainy',
-            llm: 'gpt-3.5-turbo',
+                            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: 'OBJECTIVE(目標任務):\n你的目標是客戶服務與美容美髮發行錄，創造一個良好的對話體驗，讓客戶感到舒適，願意分享他們的真實想法及需求。\n\nSTYLE(風格/個性):\n你的個性是很健談並且很直率人保學會存在，樂於創造一個放鬆和友好的氣圍。\n\nTONE(語調):\n親性、溫柔、深情人心。',
             created_at: new Date().toISOString(),
@@ -609,7 +667,7 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     try {
         const defaultConfig = {
             assistant_name: '設計師 Rainy',
-            llm: 'gpt-3.5-turbo',
+                            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: 'OBJECTIVE(目標任務):\n你的目標是客戶服務與美容美髮發行錄，創造一個良好的對話體驗，讓客戶感到舒適，願意分享他們的真實想法及需求。\n\nSTYLE(風格/個性):\n你的個性是很健談並且很直率人保學會存在，樂於創造一個放鬆和友好的氣圍。\n\nTONE(語調):\n親性、溫柔、深情人心。',
             created_at: new Date().toISOString(),
@@ -672,9 +730,9 @@ app.post('/api/init-database', async (req, res) => {
             console.log('✅ 管理員帳號已創建');
             console.log('📧 帳號: sunnyharry1');
             console.log('🔑 密碼: gele1227');
-            
-            res.json({
-                success: true,
+        
+        res.json({
+            success: true,
                 message: '資料庫初始化成功',
                 adminCreated: true,
                 adminAccount: {
@@ -911,8 +969,8 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
 
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
-    res.json({
-        success: true,
+        res.json({
+            success: true,
         message: 'EchoChat API 服務運行中',
         version: '1.0.0',
         timestamp: new Date().toISOString()
@@ -977,19 +1035,19 @@ app.get('/api/ai-models', (req, res) => {
       }
     ];
 
-    res.json({
-      success: true,
+        res.json({
+            success: true,
       message: 'AI 模型列表獲取成功',
       data: models
-    });
-  } catch (error) {
+        });
+    } catch (error) {
     console.error('獲取 AI 模型列表錯誤:', error);
-    res.status(500).json({
-      success: false,
+        res.status(500).json({
+            success: false,
       message: '獲取 AI 模型列表失敗',
       error: error.message
-    });
-  }
+        });
+    }
 });
 
 // ==================== 頻道管理 API ====================
@@ -1027,7 +1085,7 @@ app.post('/api/channels', authenticateJWT, (req, res) => {
         
         database.channels.push(newChannel);
         saveDatabase();
-        
+
         console.log('✅ 頻道建立成功:', name);
         
         res.status(201).json({
@@ -1053,7 +1111,7 @@ app.get('/api/channels', authenticateJWT, (req, res) => {
         const userChannels = (database.channels || []).filter(
             channel => channel.userId === req.staff.id
         );
-        
+
         res.json({
             success: true,
             channels: userChannels
@@ -1100,9 +1158,9 @@ app.put('/api/channels/:id', authenticateJWT, (req, res) => {
         
         database.channels[channelIndex] = updatedChannel;
         saveDatabase();
-        
+
         console.log('✅ 頻道更新成功:', updatedChannel.name);
-        
+
         res.json({
             success: true,
             message: '頻道更新成功',
@@ -1150,7 +1208,7 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
     } catch (error) {
         console.error('刪除頻道錯誤:', error);
         res.status(500).json({
-            success: false,
+                success: false,
             error: '刪除頻道失敗'
         });
     }
@@ -1186,7 +1244,7 @@ app.post('/api/channels/test', authenticateJWT, (req, res) => {
                     success: true,
                     message: 'LINE 頻道連接測試成功'
                 });
-            } catch (error) {
+                } catch (error) {
                 res.json({
                     success: false,
                     error: 'LINE 頻道連接測試失敗'
@@ -1234,7 +1292,7 @@ app.get('/api/mobile/line-integrations', authenticateJWT, (req, res) => {
             integrations: integrations
         });
         
-    } catch (error) {
+                } catch (error) {
         console.error('獲取 LINE 整合列表錯誤:', error);
         res.status(500).json({
             success: false,
@@ -1272,9 +1330,9 @@ app.get('/api/mobile/line-conversations/:tenantId', authenticateJWT, (req, res) 
         const startIndex = (page - 1) * limit;
         const endIndex = startIndex + parseInt(limit);
         const paginatedConversations = conversations.slice(startIndex, endIndex);
-        
-        res.json({
-            success: true,
+            
+            res.json({
+                success: true,
             conversations: paginatedConversations,
             pagination: {
                 page: parseInt(page),
@@ -1311,15 +1369,15 @@ app.get('/api/mobile/conversation/:conversationId', authenticateJWT, (req, res) 
             });
         }
         
-        res.json({
-            success: true,
+    res.json({
+        success: true,
             conversation: conversation
-        });
-        
+});
+
     } catch (error) {
         console.error('獲取對話詳情錯誤:', error);
-        res.status(500).json({
-            success: false,
+    res.status(500).json({
+        success: false,
             error: '獲取對話詳情失敗'
         });
     }
@@ -1383,7 +1441,7 @@ app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
         
         if (!channel) {
             return res.status(404).json({
-                success: false,
+            success: false,
                 error: '頻道不存在'
             });
         }
@@ -1404,7 +1462,7 @@ app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
         
         // 計算平均訊息數
         const averageMessages = totalConversations > 0 ? (totalMessages / totalConversations).toFixed(1) : 0;
-        
+
         res.json({
             success: true,
             stats: {
@@ -1432,7 +1490,7 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
         
         if (!query) {
             return res.status(400).json({
-                success: false,
+            success: false,
                 error: '請提供搜尋關鍵字'
             });
         }
@@ -1465,7 +1523,7 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
         const startIndex = (page - 1) * limit;
         const endIndex = startIndex + parseInt(limit);
         const paginatedConversations = conversations.slice(startIndex, endIndex);
-        
+
         res.json({
             success: true,
             conversations: paginatedConversations,
@@ -1513,7 +1571,7 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
                 apiCalls: 75.0
             }
         };
-        
+
         res.json({
             success: true,
             overview: overview
@@ -1597,7 +1655,7 @@ app.get('/api/billing/usage', authenticateJWT, (req, res) => {
         };
         
         const usageData = generateUsageData(timeRange);
-        
+
         res.json({
             success: true,
             usage: usageData,
@@ -1647,7 +1705,7 @@ app.get('/api/billing/customers', authenticateJWT, (req, res) => {
                 lastActivity: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
             }
         ];
-        
+
         res.json({
             success: true,
             customers: customers
@@ -1723,7 +1781,7 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
                 }
             }
         ];
-        
+
         res.json({
             success: true,
             plans: plans
