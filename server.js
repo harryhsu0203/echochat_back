@@ -455,7 +455,7 @@ app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
     }
 });
 
-app.post('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
+app.post('/api/accounts', authenticateJWT, checkRole(['admin']), async (req, res) => {
     try {
         const { username, password, name, role = 'user', email = '' } = req.body;
         if (!username || !password || !name) {
@@ -465,16 +465,19 @@ app.post('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
             return res.status(409).json({ success: false, error: '用戶名已存在' });
         }
         const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
-        const newUser = { id, username, password, name, role, email };
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = { id, username, password: hashedPassword, name, role, email };
         database.staff_accounts.push(newUser);
         saveDatabase();
-        res.json({ success: true, account: newUser });
+        // 不回傳密碼
+        const { password: _, ...safeUser } = newUser;
+        res.json({ success: true, account: safeUser });
     } catch (error) {
         res.status(500).json({ success: false, error: '無法新增帳號' });
     }
 });
 
-app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) => {
+app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
         const user = database.staff_accounts.find(u => u.id === id);
@@ -483,9 +486,12 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) =
         if (name !== undefined) user.name = name;
         if (role !== undefined) user.role = role;
         if (email !== undefined) user.email = email;
-        if (password) user.password = password;
+        if (password) {
+            user.password = await bcrypt.hash(password, 10);
+        }
         saveDatabase();
-        res.json({ success: true, account: user });
+        const { password: _, ...safeUser } = user;
+        res.json({ success: true, account: safeUser });
     } catch (error) {
         res.status(500).json({ success: false, error: '無法更新帳號' });
     }
