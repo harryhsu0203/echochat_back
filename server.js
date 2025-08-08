@@ -439,6 +439,82 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
     }
 });
 
+// 帳號管理 API
+app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        const accounts = (database.staff_accounts || []).map(staff => ({
+            id: staff.id,
+            username: staff.username,
+            name: staff.name,
+            role: staff.role,
+            email: staff.email || ''
+        }));
+        res.json({ success: true, accounts });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法載入帳號清單' });
+    }
+});
+
+app.post('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        const { username, password, name, role = 'user', email = '' } = req.body;
+        if (!username || !password || !name) {
+            return res.status(400).json({ success: false, error: '缺少必要欄位' });
+        }
+        if (database.staff_accounts.find(u => u.username === username)) {
+            return res.status(409).json({ success: false, error: '用戶名已存在' });
+        }
+        const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
+        const newUser = { id, username, password, name, role, email };
+        database.staff_accounts.push(newUser);
+        saveDatabase();
+        res.json({ success: true, account: newUser });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法新增帳號' });
+    }
+});
+
+app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const user = database.staff_accounts.find(u => u.id === id);
+        if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
+        const { name, role, password, email } = req.body;
+        if (name !== undefined) user.name = name;
+        if (role !== undefined) user.role = role;
+        if (email !== undefined) user.email = email;
+        if (password) user.password = password;
+        saveDatabase();
+        res.json({ success: true, account: user });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法更新帳號' });
+    }
+});
+
+app.delete('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const idx = database.staff_accounts.findIndex(u => u.id === id);
+        if (idx === -1) return res.status(404).json({ success: false, error: '帳號不存在' });
+        const removed = database.staff_accounts.splice(idx, 1)[0];
+        saveDatabase();
+        res.json({ success: true, account: removed });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法刪除帳號' });
+    }
+});
+
+app.get('/api/accounts/:id', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        const user = database.staff_accounts.find(u => u.id === id);
+        if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
+        res.json({ success: true, account: user });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法取得帳號' });
+    }
+});
+
 // 忘記密碼 API - 發送驗證碼
 app.post('/api/forgot-password', async (req, res) => {
     try {
