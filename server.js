@@ -14,12 +14,24 @@ const multer = require('multer');
 const { pipeline } = require('stream/promises');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 
 // 初始化 Express 應用
 const app = express();
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+// 綠界金流設定
+const ECPAY_MODE = process.env.ECPAY_MODE || 'Stage'; // 'Stage' or 'Prod'
+const ECPAY_MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || '';
+const ECPAY_HASH_KEY = process.env.ECPAY_HASH_KEY || '';
+const ECPAY_HASH_IV = process.env.ECPAY_HASH_IV || '';
+const ECPAY_RETURN_URL = process.env.ECPAY_RETURN_URL || '';
+const ECPAY_ORDER_RESULT_URL = process.env.ECPAY_ORDER_RESULT_URL || '';
+const ECPAY_CLIENT_BACK_URL = process.env.ECPAY_CLIENT_BACK_URL || '';
+const ECPAY_ACTION = process.env.ECPAY_ACTION || (ECPAY_MODE === 'Prod' 
+    ? 'https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5'
+    : 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5');
 
 // Google OAuth 配置
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -244,6 +256,10 @@ const connectDatabase = async () => {
             }
         });
         if (didMutateForPlan) {
+            saveDatabase();
+        }
+        if (!Array.isArray(database.payments)) {
+            database.payments = [];
             saveDatabase();
         }
 
@@ -496,12 +512,125 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
     try {
         const user = findStaffById(req.staff.id);
         if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
-        // 簡化處理：此端點直接將方案升級為 premium，實際可串接金流後再變更
-        user.plan = 'premium';
+
+        // 建立綠界訂單參數
+        const tradeNo = `EC${Date.now()}`;
+        const date = new Date();
+        const pad2 = (n) => n.toString().padStart(2, '0');
+        const tradeDate = `${date.getFullYear()}/${pad2(date.getMonth()+1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+        const totalAmount = 2990; // NTD，示例：尊榮版年費/或月費請自行調整
+        const orderParams = {
+            MerchantID: ECPAY_MERCHANT_ID,
+            MerchantTradeNo: tradeNo,
+            MerchantTradeDate: tradeDate,
+            PaymentType: 'aio',
+            TotalAmount: totalAmount,
+            TradeDesc: 'EchoChat Premium 升級',
+            ItemName: 'EchoChat 尊榮版 x1',
+            ReturnURL: ECPAY_RETURN_URL,
+            OrderResultURL: ECPAY_ORDER_RESULT_URL,
+            ClientBackURL: ECPAY_CLIENT_BACK_URL,
+            ChoosePayment: 'Credit',
+            EncryptType: 1
+        };
+
+        // 計算 CheckMacValue
+        const raw = Object.keys(orderParams)
+            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+            .map(k => `${k}=${orderParams[k]}`)
+            .join('&');
+        const urlEncoded = `HashKey=${ECPAY_HASH_KEY}&${raw}&HashIV=${ECPAY_HASH_IV}`
+            .replace(/%20/g, '+');
+        const encoded = encodeURIComponent(urlEncoded).toLowerCase()
+            .replace(/%2d/g, '-')
+            .replace(/%5f/g, '_')
+            .replace(/%2e/g, '.')
+            .replace(/%21/g, '!')
+            .replace(/%2a/g, '*')
+            .replace(/%28/g, '(')
+            .replace(/%29/g, ')');
+        const checkMacValue = crypto.createHash('sha256').update(encoded).digest('hex').toUpperCase();
+
+        // 儲存付款記錄（狀態 pending）
+        database.payments.push({
+            tradeNo,
+            userId: user.id,
+            amount: totalAmount,
+            plan: 'premium',
+            status: 'pending',
+            created_at: new Date().toISOString()
+        });
         saveDatabase();
-        return res.json({ success: true, message: '升級成功，已成為尊榮版', plan: user.plan });
+
+        // 回傳可自動送出的表單資料給前端
+        return res.json({
+            success: true,
+            action: ECPAY_ACTION,
+            params: {
+                ...orderParams,
+                CheckMacValue: checkMacValue
+            }
+        });
     } catch (error) {
-        return res.status(500).json({ success: false, error: '升級失敗' });
+        console.error('建立綠界訂單失敗:', error);
+        return res.status(500).json({ success: false, error: '建立訂單失敗' });
+    }
+});
+
+// 綠界伺服器端通知（付款結果）
+app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (req, res) => {
+    try {
+        const data = req.body || {};
+        // 驗證 CheckMacValue
+        const receivedCMV = data.CheckMacValue;
+        const { CheckMacValue, ...forMac } = data;
+        const raw = Object.keys(forMac)
+            .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+            .map(k => `${k}=${forMac[k]}`)
+            .join('&');
+        const urlEncoded = `HashKey=${ECPAY_HASH_KEY}&${raw}&HashIV=${ECPAY_HASH_IV}`
+            .replace(/%20/g, '+');
+        const encoded = encodeURIComponent(urlEncoded).toLowerCase()
+            .replace(/%2d/g, '-')
+            .replace(/%5f/g, '_')
+            .replace(/%2e/g, '.')
+            .replace(/%21/g, '!')
+            .replace(/%2a/g, '*')
+            .replace(/%28/g, '(')
+            .replace(/%29/g, ')');
+        const calcCMV = crypto.createHash('sha256').update(encoded).digest('hex').toUpperCase();
+        if (calcCMV !== receivedCMV) {
+            console.warn('綠界簽章驗證失敗');
+            return res.send('0|Error');
+        }
+
+        const tradeNo = data.MerchantTradeNo;
+        const payment = (database.payments || []).find(p => p.tradeNo === tradeNo);
+        if (!payment) {
+            console.warn('找不到付款記錄:', tradeNo);
+            return res.send('0|Error');
+        }
+
+        // 付款成功
+        if (data.RtnCode === '1' || data.RtnCode === 1) {
+            payment.status = 'paid';
+            payment.paid_at = new Date().toISOString();
+            // 升級用戶方案
+            const user = findStaffById(payment.userId);
+            if (user) {
+                user.plan = payment.plan;
+            }
+            saveDatabase();
+        } else {
+            payment.status = 'failed';
+            saveDatabase();
+        }
+
+        // 綠界要求固定回傳
+        return res.send('1|OK');
+    } catch (error) {
+        console.error('處理綠界回傳錯誤:', error);
+        return res.send('0|Error');
     }
 });
 
