@@ -187,7 +187,7 @@ class LineAPIService: ObservableObject {
     }
     
     private let lineAPIBaseURL = "https://api.line.me/v2"
-    private let backendBaseURL = "http://localhost:3000" // 替換為您的實際 API 網址
+    private var backendBaseURL: String { ConfigurationManager.shared.currentConfig.baseURL }
     
     // WebSocket 相關
     private var webSocketTask: URLSessionWebSocketTask?
@@ -505,18 +505,16 @@ class LineAPIService: ObservableObject {
     /// 自動生成 webhook URL
     func autoSetupWebhookURL() -> String {
         let currentConfig = ConfigurationManager.shared.currentConfig
-        let userId = UserDefaults.standard.integer(forKey: "currentUserId")
-        
+        let userId = UserDefaults.standard.string(forKey: "currentUserId") ?? "default"
         // 生成格式：https://domain.com/api/webhook/line/{userId}
-        let webhookURL = "\(currentConfig.baseURL)/webhook/line/\(userId)"
-        return webhookURL
+        return "\(currentConfig.baseURL)/api/webhook/line/\(userId)"
     }
     
     /// 獲取當前的 webhook URL
     func getCurrentWebhookURL() -> String {
         let currentConfig = ConfigurationManager.shared.currentConfig
-        let userId = UserDefaults.standard.integer(forKey: "currentUserId")
-        return "\(currentConfig.baseURL)/webhook/line/\(userId)"
+        let userId = UserDefaults.standard.string(forKey: "currentUserId") ?? "default"
+        return "\(currentConfig.baseURL)/api/webhook/line/\(userId)"
     }
     
     /// 驗證 webhook URL 格式
