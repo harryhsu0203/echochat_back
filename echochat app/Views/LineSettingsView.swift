@@ -66,14 +66,16 @@ struct LineSettingsView: View {
                                 title: "Channel Access Token",
                                 placeholder: "輸入您的 Line Channel Access Token",
                                 text: $channelAccessToken,
-                                isSecure: true
+                                isSecure: true,
+                                icon: "key"
                             )
                             
                             SettingsField(
                                 title: "Channel Secret",
                                 placeholder: "輸入您的 Line Channel Secret",
                                 text: $channelSecret,
-                                isSecure: true
+                                isSecure: true,
+                                icon: "lock"
                             )
                             
                             VStack(alignment: .leading, spacing: 8) {
@@ -178,7 +180,8 @@ struct LineSettingsView: View {
                                 value: $responseDelay,
                                 range: 0...10,
                                 step: 0.5,
-                                format: "%.1f"
+                                format: "%.1f",
+                                icon: "timer"
                             )
                         }
                     }
