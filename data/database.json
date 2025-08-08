@@ -1,0 +1,87 @@
+{
+  "staff_accounts": [
+    {
+      "id": 1,
+      "username": "testuser",
+      "password": "$2a$10$7My1aTe9WCbADbvUTmrz.edGEGIMRP/2juGNN6zwLBh011qKhYCUu",
+      "name": "testuser",
+      "role": "user",
+      "email": "test@example.com",
+      "created_at": "2025-08-07T17:16:27.233Z"
+    },
+    {
+      "id": 2,
+      "username": "testuser3",
+      "password": "$2a$10$yCPC7B93ywF.2ZTru4gwDuo7if/btK6PEiMJfeVUGmHWjo5jKqohi",
+      "name": "testuser3",
+      "role": "user",
+      "email": "test3@example.com",
+      "created_at": "2025-08-07T17:18:05.064Z"
+    },
+    {
+      "id": 3,
+      "username": "admin",
+      "password": "$2a$10$BAYV0gqH5wCEpCxCBfp/jOLN44XXYEUhksAIG.pQF0YH8UP.EEEs2",
+      "name": "admin",
+      "role": "user",
+      "email": "shengkai1215@gmail.com",
+      "created_at": "2025-08-07T18:27:58.370Z"
+    }
+  ],
+  "email_verifications": [
+    {
+      "email": "test@example.com",
+      "code": "508302",
+      "expiresAt": "2025-08-07T17:26:13.261Z",
+      "verified": true
+    },
+    {
+      "email": "test2@example.com",
+      "code": "183039",
+      "expiresAt": "2025-08-07T17:27:19.907Z",
+      "verified": true
+    },
+    {
+      "email": "test3@example.com",
+      "code": "597655",
+      "expiresAt": "2025-08-07T17:27:51.687Z",
+      "verified": true
+    },
+    {
+      "email": "shengkai@mail.com",
+      "code": "372122",
+      "expiresAt": "2025-08-07T17:29:39.156Z",
+      "verified": false
+    },
+    {
+      "email": "your-email@example.com",
+      "code": "697920",
+      "expiresAt": "2025-08-07T17:31:54.247Z",
+      "verified": false
+    },
+    {
+      "email": "newtest@example.com",
+      "code": "130911",
+      "expiresAt": "2025-08-07T17:32:41.165Z",
+      "verified": false
+    },
+    {
+      "email": "your-actual-email@domain.com",
+      "code": "389633",
+      "expiresAt": "2025-08-07T17:33:34.604Z",
+      "verified": false
+    },
+    {
+      "email": "shengkai1215@gmai.com",
+      "code": "539495",
+      "expiresAt": "2025-08-07T18:28:04.125Z",
+      "verified": false
+    },
+    {
+      "email": "shengkai1215@gmail.com",
+      "code": "535883",
+      "expiresAt": "2025-08-07T18:37:36.227Z",
+      "verified": true
+    }
+  ]
+}

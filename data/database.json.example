@@ -1,0 +1,27 @@
+{
+  "staff_accounts": [
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "$2a$10$example.hash.here",
+      "name": "系統管理員",
+      "role": "admin",
+      "email": "admin@example.com",
+      "created_at": "2025-01-01T00:00:00.000Z"
+    }
+  ],
+  "user_questions": [],
+  "knowledge": [],
+  "user_states": [],
+  "chat_history": [],
+  "ai_assistant_config": [
+    {
+      "assistant_name": "AI 美髮助理",
+      "llm": "gpt-4o-mini",
+      "use_case": "customer-service",
+      "description": "我是您的專業美髮助理，很高興為您服務！"
+    }
+  ],
+  "email_verifications": [],
+  "password_reset_requests": []
+} 
