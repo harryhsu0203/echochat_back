@@ -91,9 +91,9 @@ struct SystemSettingsView: View {
                                 // 字體大小
                                 SettingsPicker(
                                     title: "字體大小",
+                                    icon: "textformat.size",
                                     selection: $fontSize,
-                                    options: fontSizeOptions,
-                                    icon: "textformat.size"
+                                    options: fontSizeOptions
                                 )
                                 .onChange(of: fontSize) { _, newValue in
                                     settingsManager.triggerHapticFeedback(.light)
@@ -176,7 +176,6 @@ struct SystemSettingsView: View {
                             SettingsButton(
                                 title: "重設為預設值",
                                 icon: "arrow.clockwise",
-                                color: .orange,
                                 action: { 
                                     settingsManager.triggerHapticFeedback(.medium)
                                     showingResetAlert = true 
@@ -186,7 +185,6 @@ struct SystemSettingsView: View {
                             SettingsButton(
                                 title: "匯出設定",
                                 icon: "square.and.arrow.up",
-                                color: .blue,
                                 action: { 
                                     settingsManager.triggerHapticFeedback(.light)
                                     exportSettings() 
@@ -196,7 +194,6 @@ struct SystemSettingsView: View {
                             SettingsButton(
                                 title: "關於應用程式",
                                 icon: "info.circle",
-                                color: .gray,
                                 action: { 
                                     settingsManager.triggerHapticFeedback(.light)
                                     showAboutApp() 

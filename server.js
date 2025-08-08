@@ -350,25 +350,25 @@ app.post('/api/login', async (req, res) => {
         
         if (!username || !password) {
             return res.status(400).json({
-                success: false,
+            success: false,
                 error: '請提供用戶名和密碼'
-            });
-        }
-
+        });
+    }
+    
         try {
             const staff = findStaffByUsername(username);
-            
+    
             if (!staff) {
-                return res.status(401).json({
-                    success: false,
+        return res.status(401).json({
+            success: false,
                     error: '用戶名或密碼錯誤'
                 });
             }
 
             const isValidPassword = await bcrypt.compare(password, staff.password);
             if (!isValidPassword) {
-                return res.status(401).json({
-                    success: false,
+        return res.status(401).json({
+            success: false,
                     error: '用戶名或密碼錯誤'
                 });
             }
@@ -565,7 +565,7 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
         
         // 回傳可自動送出的表單資料給前端
         return res.json({
-                success: true,
+        success: true,
             action: ECPAY_ACTION,
             params: {
                 ...orderParams,
@@ -794,7 +794,7 @@ app.post('/api/forgot-password', async (req, res) => {
             
             console.log('✅ 密碼重設驗證碼已發送給:', email);
             
-            res.json({
+        res.json({
                 success: true,
                 message: '驗證碼已發送到您的電子郵件'
             });
@@ -1277,21 +1277,21 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
 
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
-        res.json({
-            success: true,
+                res.json({
+                    success: true,
         message: 'EchoChat API 服務運行中',
         version: '1.0.0',
-        timestamp: new Date().toISOString()
-    });
+                    timestamp: new Date().toISOString()
+                });
 });
-
+                
 // API 健康檢查端點
 app.get('/api/health', (req, res) => {
-    res.json({
-        success: true,
+                res.json({
+                    success: true,
         message: 'EchoChat API 健康檢查通過',
-        timestamp: new Date().toISOString()
-    });
+                    timestamp: new Date().toISOString()
+                });
 });
 
 // ==================== AI 模型 API ====================
@@ -1348,7 +1348,7 @@ app.get('/api/ai-models', (req, res) => {
       message: 'AI 模型列表獲取成功',
       data: models
         });
-    } catch (error) {
+        } catch (error) {
     console.error('獲取 AI 模型列表錯誤:', error);
         res.status(500).json({
             success: false,
@@ -1397,7 +1397,7 @@ app.post('/api/channels', authenticateJWT, (req, res) => {
         console.log('✅ 頻道建立成功:', name);
         
         res.status(201).json({
-            success: true,
+                    success: true,
             message: '頻道建立成功',
             channel: newChannel
         });
@@ -1427,8 +1427,8 @@ app.get('/api/channels', authenticateJWT, (req, res) => {
         
     } catch (error) {
         console.error('獲取頻道列表錯誤:', error);
-        res.status(500).json({
-            success: false,
+                res.status(500).json({
+                    success: false,
             error: '獲取頻道列表失敗'
         });
     }
@@ -1554,7 +1554,7 @@ app.post('/api/channels/test', authenticateJWT, (req, res) => {
                 });
                 } catch (error) {
                 res.json({
-                    success: false,
+                success: false,
                     error: 'LINE 頻道連接測試失敗'
                 });
             }
@@ -1600,7 +1600,7 @@ app.get('/api/mobile/line-integrations', authenticateJWT, (req, res) => {
             integrations: integrations
         });
         
-                } catch (error) {
+    } catch (error) {
         console.error('獲取 LINE 整合列表錯誤:', error);
         res.status(500).json({
             success: false,
@@ -1653,7 +1653,7 @@ app.get('/api/mobile/line-conversations/:tenantId', authenticateJWT, (req, res) 
     } catch (error) {
         console.error('獲取 LINE 對話記錄錯誤:', error);
         res.status(500).json({
-            success: false,
+                success: false,
             error: '獲取 LINE 對話記錄失敗'
         });
     }
@@ -1677,15 +1677,15 @@ app.get('/api/mobile/conversation/:conversationId', authenticateJWT, (req, res) 
             });
         }
         
-    res.json({
-        success: true,
+        res.json({
+            success: true,
             conversation: conversation
 });
 
     } catch (error) {
         console.error('獲取對話詳情錯誤:', error);
-    res.status(500).json({
-        success: false,
+        res.status(500).json({
+            success: false,
             error: '獲取對話詳情失敗'
         });
     }
@@ -1729,7 +1729,7 @@ app.post('/api/mobile/line-test-message/:tenantId', authenticateJWT, (req, res) 
     } catch (error) {
         console.error('發送測試訊息錯誤:', error);
         res.status(500).json({
-            success: false,
+                success: false,
             error: '發送測試訊息失敗'
         });
     }
@@ -1749,7 +1749,7 @@ app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
         
         if (!channel) {
             return res.status(404).json({
-            success: false,
+                success: false,
                 error: '頻道不存在'
             });
         }
@@ -1770,7 +1770,7 @@ app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
         
         // 計算平均訊息數
         const averageMessages = totalConversations > 0 ? (totalMessages / totalConversations).toFixed(1) : 0;
-
+        
         res.json({
             success: true,
             stats: {
@@ -1798,7 +1798,7 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
         
         if (!query) {
             return res.status(400).json({
-            success: false,
+                success: false,
                 error: '請提供搜尋關鍵字'
             });
         }
@@ -1831,7 +1831,7 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
         const startIndex = (page - 1) * limit;
         const endIndex = startIndex + parseInt(limit);
         const paginatedConversations = conversations.slice(startIndex, endIndex);
-
+        
         res.json({
             success: true,
             conversations: paginatedConversations,
@@ -1888,7 +1888,7 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
     } catch (error) {
         console.error('獲取帳務總覽錯誤:', error);
         res.status(500).json({
-            success: false,
+                success: false,
             error: '獲取帳務總覽失敗'
         });
     }
@@ -2013,16 +2013,16 @@ app.get('/api/billing/customers', authenticateJWT, (req, res) => {
                 lastActivity: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
             }
         ];
-
-        res.json({
-            success: true,
+            
+            res.json({
+                success: true,
             customers: customers
-        });
+            });
         
-    } catch (error) {
+        } catch (error) {
         console.error('獲取客戶使用量錯誤:', error);
-        res.status(500).json({
-            success: false,
+            res.status(500).json({
+                success: false,
             error: '獲取客戶使用量失敗'
         });
     }
@@ -2126,7 +2126,7 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
     } catch (error) {
         console.error('獲取 LINE API 設定錯誤:', error);
         res.status(500).json({
-            success: false,
+                success: false,
             error: '獲取 LINE API 設定失敗'
         });
     }
@@ -2161,7 +2161,7 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
     } catch (error) {
         console.error('保存 LINE API 設定錯誤:', error);
         res.status(500).json({
-            success: false,
+                success: false,
             error: '保存 LINE API 設定失敗'
         });
     }
@@ -2215,6 +2215,14 @@ app.post('/api/user/webhook-url', authenticateJWT, async (req, res) => {
             error: '更新 Webhook URL 失敗'
         });
     }
+});
+
+// LINE Webhook 驗證（GET/HEAD）- 供 LINE Developers「Verify」使用
+app.get('/api/webhook/line/:userId', (req, res) => {
+    return res.status(200).send('OK');
+});
+app.head('/api/webhook/line/:userId', (req, res) => {
+    return res.sendStatus(200);
 });
 
 // LINE Webhook 處理 (用戶專用)
@@ -2427,7 +2435,7 @@ const startServer = async () => {
         
         // 啟動伺服器
         const PORT = process.env.PORT || 3000;
-        app.listen(PORT, () => {
+app.listen(PORT, () => {
             console.log('🚀 EchoChat API server is running on port', PORT);
             console.log('📝 API 端點: http://localhost:' + PORT + '/api');
             console.log('🔍 健康檢查: http://localhost:' + PORT + '/api/health');

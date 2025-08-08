@@ -94,6 +94,9 @@ struct SettingsView: View {
                     // 快速設定區域
                     QuickSetupSection()
                     
+                    // 新功能區域
+                    NewFeaturesSection()
+                    
                     // AI 助理基本資訊
                     SettingsSection(title: "AI 助理基本資訊") {
                         VStack(spacing: 15) {
@@ -179,23 +182,23 @@ struct SettingsView: View {
                         VStack(spacing: 15) {
                             SettingsPicker(
                                 title: "回應風格",
+                                icon: "text.bubble",
                                 selection: $aiResponseStyle,
-                                options: ["正式", "友善", "專業", "輕鬆", "幽默"],
-                                icon: "text.bubble"
+                                options: ["正式", "友善", "專業", "輕鬆", "幽默"]
                             )
                             
                             SettingsPicker(
                                 title: "語言設定",
+                                icon: "globe",
                                 selection: $aiLanguage,
-                                options: ["繁體中文", "簡體中文", "English", "日本語"],
-                                icon: "globe"
+                                options: ["繁體中文", "簡體中文", "English", "日本語"]
                             )
                             
                             SettingsPicker(
                                 title: "頭像圖示",
+                                icon: "photo",
                                 selection: $aiAvatar,
-                                options: ["robot", "person.circle", "brain.head.profile", "sparkles", "star.circle"],
-                                icon: "photo"
+                                options: ["robot", "person.circle", "brain.head.profile", "sparkles", "star.circle"]
                             )
                         }
                     }
@@ -234,8 +237,8 @@ struct SettingsView: View {
                         SettingsButton(
                             title: "保存設定",
                             icon: "checkmark.circle",
-                            color: .green,
-                            action: saveSettings
+                            action: saveSettings,
+                            isDestructive: false
                         )
                         
                         SettingsButton(
@@ -251,34 +254,22 @@ struct SettingsView: View {
                         )
                         
                         NavigationLink(destination: AIAssistantConfigView()) {
-                            SettingsButtonView(
-                                title: "AI助理配置",
-                                icon: "brain.head.profile",
-                                color: .blue
-                            )
+                            SettingsButton(title: "AI助理配置", icon: "brain.head.profile", action: {}, isDestructive: false)
                         }
                         
                         NavigationLink(destination: LineSettingsView()) {
-                            SettingsButtonView(
-                                title: "Line 設定",
-                                icon: "message.circle",
-                                color: .green
-                            )
+                            SettingsButton(title: "Line 設定", icon: "message.circle", action: {}, isDestructive: false)
                         }
                         
                         NavigationLink(destination: SystemSettingsView()) {
-                            SettingsButtonView(
-                                title: "系統設定",
-                                icon: "gearshape",
-                                color: .purple
-                            )
+                            SettingsButton(title: "系統設定", icon: "gearshape", action: {}, isDestructive: false)
                         }
                         
                         SettingsButton(
                             title: "重設所有設定",
                             icon: "arrow.clockwise",
-                            color: .red,
-                            action: { showingResetAlert = true }
+                            action: { showingResetAlert = true },
+                            isDestructive: true
                         )
                     }
                 }
@@ -1152,6 +1143,84 @@ struct PreviewInfoRow: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.trailing)
+        }
+    }
+}
+
+// MARK: - 新功能區域
+struct NewFeaturesSection: View {
+    @State private var showingPlanManagement = false
+    @State private var showingKnowledgeManagement = false
+    
+    var body: some View {
+        SettingsSection(title: "新功能") {
+            VStack(spacing: 15) {
+                // 會員方案管理
+                Button(action: {
+                    showingPlanManagement = true
+                }) {
+                    HStack {
+                        Image(systemName: "crown.fill")
+                            .foregroundColor(.orange)
+                            .frame(width: 24)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("會員方案管理")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            Text("查看和升級您的會員方案")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                // 知識庫管理
+                Button(action: {
+                    showingKnowledgeManagement = true
+                }) {
+                    HStack {
+                        Image(systemName: "book.fill")
+                            .foregroundColor(.blue)
+                            .frame(width: 24)
+                        
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("知識庫管理")
+                                .font(.headline)
+                                .foregroundColor(.primary)
+                            Text("管理您的知識項目和資料")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .foregroundColor(.secondary)
+                            .font(.caption)
+                    }
+                    .padding()
+                    .background(Color(.systemGray6))
+                    .cornerRadius(12)
+                }
+                .buttonStyle(PlainButtonStyle())
+            }
+        }
+        .sheet(isPresented: $showingPlanManagement) {
+            PlanManagementView()
+        }
+        .sheet(isPresented: $showingKnowledgeManagement) {
+            KnowledgeManagementView()
         }
     }
 }
