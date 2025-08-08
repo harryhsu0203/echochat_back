@@ -550,15 +550,13 @@ class LineAPIService: ObservableObject {
         return false
     }
     
-    /// 獲取 webhook URL 建議列表
+    /// 獲取 webhook URL 建議列表（全部統一到 /api/webhook/line/{userId}）
     func getWebhookURLSuggestions() -> [String] {
         let currentConfig = ConfigurationManager.shared.currentConfig
-        let userId = UserDefaults.standard.integer(forKey: "currentUserId")
+        let userId = UserDefaults.standard.string(forKey: "currentUserId") ?? "default"
         
         return [
-            "\(currentConfig.baseURL)/webhook/line/\(userId)",
-            "\(currentConfig.baseURL)/webhook/line-simple",
-            "https://ai-chatbot-umqm.onrender.com/api/webhook/line/\(userId)"
+            "\(currentConfig.baseURL)/api/webhook/line/\(userId)"
         ]
     }
     

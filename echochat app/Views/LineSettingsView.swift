@@ -671,7 +671,10 @@ struct LineSettingsView: View {
             await MainActor.run {
                 channelSecret = settings.channelSecret
                 channelAccessToken = settings.channelAccessToken
-                backendWebhookUrl = settings.webhookUrl
+                // 安全防呆：若後端回傳的 webhookUrl 無效，改用本機正確生成的 URL
+                let candidate = settings.webhookUrl
+                let resolved = lineAPIService.validateWebhookURL(candidate) ? candidate : lineAPIService.getCurrentWebhookURL()
+                backendWebhookUrl = resolved
                 isLoadingSettings = false
                 loadError = nil
             }

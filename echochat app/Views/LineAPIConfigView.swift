@@ -566,12 +566,18 @@ class LineAPIConfigViewModel: ObservableObject {
         channelId = UserDefaults.standard.string(forKey: "lineChannelId") ?? ""
         channelSecret = UserDefaults.standard.string(forKey: "lineChannelSecret") ?? ""
         channelAccessToken = UserDefaults.standard.string(forKey: "lineChannelAccessToken") ?? ""
-        webhookUrl = UserDefaults.standard.string(forKey: "lineWebhookUrl") ?? ""
+        let storedWebhook = UserDefaults.standard.string(forKey: "lineWebhookUrl") ?? ""
+        // 防呆：若存的是錯誤值（例如被寫成 secret 或空值），改為重新生成
+        if storedWebhook.isEmpty || !LineAPIService.shared.validateWebhookURL(storedWebhook) {
+            generateWebhookURL()
+        } else {
+            webhookUrl = storedWebhook
+        }
         autoReplyEnabled = UserDefaults.standard.bool(forKey: "lineAutoReplyEnabled")
         messageLoggingEnabled = UserDefaults.standard.bool(forKey: "lineMessageLoggingEnabled")
         
         // 生成 webhook URL
-        if webhookUrl.isEmpty {
+        if webhookUrl.isEmpty || !LineAPIService.shared.validateWebhookURL(webhookUrl) {
             generateWebhookURL()
         }
         
