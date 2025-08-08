@@ -28,17 +28,21 @@ const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 // CORS 設定 - 允許前端網站和手機 App 訪問
 app.use(cors({
     origin: [
-        'http://localhost:3000',                    // 本地開發
-        'http://localhost:5173',                    // Vite 開發伺服器
-        'http://localhost:8000',                    // Python HTTP 伺服器
-        'https://ai-chatbot-umqm.onrender.com',    // 您的前端網站
-        'https://echochat-web.vercel.app',          // 備用前端網站
-        'https://echochat-app.vercel.app',          // App 網站
-        'https://echochat-frontend.onrender.com',   // Render 前端
-        'https://echochat-web.onrender.com',        // 可能的 Render 前端
-        'capacitor://localhost',                    // 手機 App
-        'http://localhost:8080',                    // 手機 App 開發
-        '*'                                          // 開發時允許所有來源
+        // 本地開發
+        'http://localhost:3000',
+        'http://localhost:5173',
+        'http://localhost:8000',
+        'http://localhost:8080',
+        'capacitor://localhost',
+        // 雲端環境（Render、Vercel 等）
+        'https://ai-chatbot-umqm.onrender.com',
+        'https://echochat-web.vercel.app',
+        'https://echochat-app.vercel.app',
+        'https://echochat-frontend.onrender.com',
+        'https://echochat-web.onrender.com',
+        // 自訂網域
+        'https://echochat.com.tw',
+        'https://www.echochat.com.tw'
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
