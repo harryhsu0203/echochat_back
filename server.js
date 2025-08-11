@@ -40,22 +40,23 @@ const ECPAY_ACTION = process.env.ECPAY_ACTION || (ECPAY_MODE === 'Prod'
     : 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5');
 
 // ====== Token 計費/用量機制 ======
+// 方案：僅三種 free / premium(尊榮版) / enterprise(企業版)
+// enterprise 不固定，由管理員在使用者檔案上自訂 allowance
 const PLAN_TOKEN_MONTHLY = {
-    free: 20000,        // 例：2 萬 tokens / 月
-    basic: 100000,      // 10 萬
-    pro: 300000,        // 30 萬
-    professional: 300000,
-    premium: 600000,    // 60 萬
-    business: 1000000,  // 100 萬
-    enterprise: 3000000 // 300 萬
+    free: 20000,       // 例：2 萬 / 月
+    premium: 600000    // 尊榮版預設 60 萬 / 月（可改）
 };
 
 function getUserById(userId) {
     return (database.staff_accounts || []).find(u => u.id === userId);
 }
 
-function getPlanAllowance(plan) {
-    return PLAN_TOKEN_MONTHLY[(plan || 'free').toLowerCase()] || PLAN_TOKEN_MONTHLY.free;
+function getPlanAllowance(plan, user) {
+    const p = (plan || 'free').toLowerCase();
+    if (p === 'enterprise' && user && typeof user.enterprise_token_monthly === 'number') {
+        return user.enterprise_token_monthly;
+    }
+    return PLAN_TOKEN_MONTHLY[p] || PLAN_TOKEN_MONTHLY.free;
 }
 
 function getNow() { return new Date(); }
@@ -1273,7 +1274,7 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         const id = parseInt(req.params.id);
         const user = database.staff_accounts.find(u => u.id === id);
         if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
-        const { name, role, password, email, plan, plan_expires_at, subscription_status, next_billing_at } = req.body;
+        const { name, role, password, email, plan, plan_expires_at, subscription_status, next_billing_at, enterprise_token_monthly } = req.body;
         if (name !== undefined) user.name = name;
         if (role !== undefined) user.role = role;
         if (email !== undefined) user.email = email;
@@ -1281,6 +1282,7 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         if (plan_expires_at !== undefined) user.plan_expires_at = plan_expires_at;
         if (subscription_status !== undefined) user.subscription_status = subscription_status;
         if (next_billing_at !== undefined) user.next_billing_at = next_billing_at;
+        if (enterprise_token_monthly !== undefined) user.enterprise_token_monthly = parseInt(enterprise_token_monthly, 10) || 0;
         if (password) {
             user.password = await bcrypt.hash(password, 10);
         }
@@ -1540,7 +1542,7 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
             config,
             token: {
                 plan: user?.plan || 'free',
-                allowance: getPlanAllowance(user?.plan || 'free'),
+                allowance: getPlanAllowance(user?.plan || 'free', user),
                 used_in_cycle: user.token_used_in_cycle || 0,
                 bonus_balance: user.token_bonus_balance || 0,
                 next_billing_at: user.next_billing_at
@@ -1777,7 +1779,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         const user = getUserById(req.staff.id);
         ensureUserTokenFields(user);
         maybeResetCycle(user);
-        const planAllowance = getPlanAllowance(user?.plan || 'free');
+        const planAllowance = getPlanAllowance(user?.plan || 'free', user);
         const estimatedTokens = estimateChatTokens(message, knowledgeContext, 600);
         const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
         if (availableThisCycle < estimatedTokens) {
