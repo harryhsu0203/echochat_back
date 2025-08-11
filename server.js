@@ -22,6 +22,7 @@ const { parseStringPromise } = require('xml2js');
 
 // 初始化 Express 應用
 const app = express();
+app.disable('x-powered-by');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 // 綠界金流設定
 const ECPAY_MODE = process.env.ECPAY_MODE || 'Stage'; // 'Stage' or 'Prod'
@@ -61,7 +62,8 @@ app.use(cors({
     ],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    maxAge: 600
 }));
 
 // 請求速率限制
@@ -88,11 +90,12 @@ const loginLimiter = rateLimit({
 });
 
 // 中間件設置
+app.use(helmet());
 app.use(limiter);
 app.use('/api/login', loginLimiter);
 app.use('/webhook', express.raw({ type: '*/*' }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '200kb' }));
+app.use(express.urlencoded({ extended: true, limit: '200kb' }));
 
 // JWT 身份驗證中間件
 const authenticateJWT = (req, res, next) => {
