@@ -137,8 +137,15 @@ async function buildMultipageSiteContext(baseUrl) {
     return text;
 }
 
-async function resolveBaseUrl() {
+async function resolveBaseUrl(req) {
     const candidates = [];
+    // 1) 依據請求來源（Referer/Origin）優先
+    try {
+        const hdrOrigin = req?.headers?.origin || '';
+        const hdrReferer = req?.headers?.referer || '';
+        const pick = (hdrOrigin || hdrReferer).match(/^https?:\/\/[^\/]+/i)?.[0];
+        if (pick) candidates.push(pick);
+    } catch {}
     if (process.env.PUBLIC_SITE_URL) candidates.push(process.env.PUBLIC_SITE_URL);
     candidates.push('https://echochat-frontend.onrender.com');
     candidates.push('https://echochat-web.onrender.com');
@@ -1830,7 +1837,7 @@ app.post('/api/public-chat', async (req, res) => {
         }
 
         // 萃取多頁內容（首頁/產品/特色/使用場景/定價/關於我們）
-        const baseUrl = await resolveBaseUrl();
+        const baseUrl = await resolveBaseUrl(req);
         const siteContextBase = await buildMultipageSiteContext(baseUrl);
         const pricingFromI18n = await fetchI18nPricing(baseUrl);
         const siteContext = [siteContextBase, pricingFromI18n].filter(Boolean).join('\n\n');
@@ -1864,6 +1871,22 @@ app.post('/api/public-chat', async (req, res) => {
     } catch (error) {
         console.error('公開聊天錯誤(子模組):', error.response?.data || error.message);
         res.status(500).json({ success: false, error: '服務暫時不可用，請稍後再試' });
+    }
+});
+
+// 內容快取/來源偵測除錯端點
+app.get('/api/public-chat/context', async (req, res) => {
+    try {
+        const baseUrl = await resolveBaseUrl(req);
+        const context = await buildMultipageSiteContext(baseUrl);
+        res.json({
+            success: true,
+            baseUrl,
+            length: context.length,
+            preview: context.slice(0, 800)
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
