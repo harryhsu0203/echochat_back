@@ -849,6 +849,9 @@ app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
             role: staff.role,
             email: staff.email || '',
             plan: staff.plan || 'free',
+            plan_expires_at: staff.plan_expires_at || null,
+            subscription_status: staff.subscription_status || 'none',
+            next_billing_at: staff.next_billing_at || null,
             created_at: staff.created_at
         }));
         res.json({ success: true, accounts });
@@ -884,11 +887,14 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         const id = parseInt(req.params.id);
         const user = database.staff_accounts.find(u => u.id === id);
         if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
-        const { name, role, password, email, plan } = req.body;
+        const { name, role, password, email, plan, plan_expires_at, subscription_status, next_billing_at } = req.body;
         if (name !== undefined) user.name = name;
         if (role !== undefined) user.role = role;
         if (email !== undefined) user.email = email;
         if (plan !== undefined) user.plan = plan;
+        if (plan_expires_at !== undefined) user.plan_expires_at = plan_expires_at;
+        if (subscription_status !== undefined) user.subscription_status = subscription_status;
+        if (next_billing_at !== undefined) user.next_billing_at = next_billing_at;
         if (password) {
             user.password = await bcrypt.hash(password, 10);
         }
