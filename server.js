@@ -1695,12 +1695,34 @@ app.post('/api/public-chat', async (req, res) => {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
         }
 
+        // 嘗試抓取首頁內容，萃取標題與段落
+        let siteContext = '';
+        try {
+            const baseUrl = process.env.PUBLIC_SITE_URL || 'https://echochat-web.onrender.com/';
+            const { data: html } = await axios.get(baseUrl, { timeout: 8000 });
+            const $ = cheerio.load(html);
+            const title = $('h1.hero-title').text().trim();
+            const subtitle = $('p.hero-subtitle').text().trim();
+            const desc = $('p.hero-description').text().trim();
+            const features = [];
+            $('.feature-grid .feature-card').each((_, el) => {
+                const h3 = $(el).find('h3').text().trim();
+                const p = $(el).find('p').text().trim();
+                if (h3 && p) features.push(`${h3}: ${p}`);
+            });
+            siteContext = [title && `主標: ${title}`, subtitle && `副標: ${subtitle}`, desc && `說明: ${desc}`, features.length ? `功能: ${features.join('；')}` : '']
+                .filter(Boolean)
+                .join('\n');
+        } catch (e) {
+            // 抓取失敗不阻塞
+        }
+
         if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.startsWith('sk-')) {
-            const desc = 'EchoChat 提供 AI 客服、LINE/網站整合、知識庫導入與自動回覆，協助企業快速上線智慧客服。';
+            const desc = siteContext || 'EchoChat 提供 AI 客服、LINE/網站整合、知識庫導入與自動回覆，協助企業快速上線智慧客服。';
             return res.json({ success: true, reply: `${desc}\n\n目前為公開對話測試模式，若需更進一步協助，請前往聯繫我們頁面。` });
         }
 
-        const systemPrompt = '你是本網站的客服助理，請根據網站介紹與功能提供簡潔、友善且實用的回答。';
+        const systemPrompt = `你是本網站的客服助理，請根據網站介紹與功能提供簡潔、友善且實用的回答。\n\n【網站內容】\n${siteContext}`;
         const messages = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: message }
