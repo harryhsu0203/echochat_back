@@ -97,6 +97,49 @@ app.use('/webhook', express.raw({ type: '*/*' }));
 app.use(express.json({ limit: '200kb' }));
 app.use(express.urlencoded({ extended: true, limit: '200kb' }));
 
+// ========= 敏感資訊加解密（AES-256-GCM） =========
+function getEncryptionKey() {
+    const secret = process.env.LINE_SECRET_KEY;
+    if (!secret || typeof secret !== 'string' || secret.length < 10) {
+        return null;
+    }
+    return crypto.createHash('sha256').update(secret).digest();
+}
+
+function encryptSensitive(plainText) {
+    try {
+        const key = getEncryptionKey();
+        if (!key) return null;
+        const iv = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+        const enc = Buffer.concat([cipher.update(String(plainText), 'utf8'), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        return `v1:gcm:${iv.toString('base64')}:${tag.toString('base64')}:${enc.toString('base64')}`;
+    } catch (e) {
+        console.warn('加密失敗，將回退為明文儲存:', e.message);
+        return null;
+    }
+}
+
+function decryptSensitive(encText) {
+    try {
+        const key = getEncryptionKey();
+        if (!key) return null;
+        if (!encText || typeof encText !== 'string' || !encText.startsWith('v1:gcm:')) return null;
+        const parts = encText.split(':');
+        const iv = Buffer.from(parts[2], 'base64');
+        const tag = Buffer.from(parts[3], 'base64');
+        const data = Buffer.from(parts[4], 'base64');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAuthTag(tag);
+        const dec = Buffer.concat([decipher.update(data), decipher.final()]);
+        return dec.toString('utf8');
+    } catch (e) {
+        console.warn('解密失敗，將回退為空值:', e.message);
+        return null;
+    }
+}
+
 // JWT 身份驗證中間件
 const authenticateJWT = (req, res, next) => {
     try {
@@ -2276,12 +2319,13 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
         const userId = req.staff.id;
         loadDatabase();
         const record = (database.line_api_settings || []).find(r => r.user_id === userId);
-        const settings = record || {};
-        // 更新快取
+        const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '';
+        const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret || '';
+        // 更新快取（不回傳明文至前端，僅標示狀態）
         lineAPISettings[userId] = {
-            channelAccessToken: settings.channel_access_token || '',
-            channelSecret: settings.channel_secret || '',
-            webhookUrl: settings.webhook_url || ''
+            channelAccessToken: decryptedToken ? 'Configured' : '',
+            channelSecret: decryptedSecret ? 'Configured' : '',
+            webhookUrl: record?.webhook_url || ''
         };
 
         res.json({
@@ -2317,10 +2361,12 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
         loadDatabase();
         if (!database.line_api_settings) database.line_api_settings = [];
         const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        const encryptedToken = encryptSensitive(channelAccessToken);
+        const encryptedSecret = encryptSensitive(channelSecret);
         const record = {
             user_id: userId,
-            channel_access_token: channelAccessToken,
-            channel_secret: channelSecret,
+            channel_access_token: encryptedToken || channelAccessToken,
+            channel_secret: encryptedSecret || channelSecret,
             webhook_url: webhookUrl || `${req.protocol}://${req.get('host')}/api/webhook/line/${userId}`,
             updated_at: new Date().toISOString()
         };
@@ -2328,8 +2374,8 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
         saveDatabase();
 
         lineAPISettings[userId] = {
-            channelAccessToken,
-            channelSecret,
+            channelAccessToken: encryptedToken ? 'Encrypted' : channelAccessToken,
+            channelSecret: encryptedSecret ? 'Encrypted' : channelSecret,
             webhookUrl: record.webhook_url,
             updatedAt: record.updated_at
         };
