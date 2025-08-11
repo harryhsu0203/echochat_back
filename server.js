@@ -1724,13 +1724,16 @@ app.post('/api/channels', authenticateJWT, (req, res) => {
         
         loadDatabase();
         
+        const encApiKey = encryptSensitive(apiKey);
+        const encSecret = encryptSensitive(channelSecret);
         const newChannel = {
             id: uuidv4(),
             userId: req.staff.id,
             name,
             platform,
-            apiKey,
-            channelSecret,
+            apiKeyEnc: encApiKey || null,
+            channelSecretEnc: encSecret || null,
+            hasCredentials: true,
             webhookUrl: webhookUrl || '',
             isActive: isActive || false,
             createdAt: new Date().toISOString(),
@@ -1746,11 +1749,9 @@ app.post('/api/channels', authenticateJWT, (req, res) => {
 
         console.log('✅ 頻道建立成功:', name);
         
-        res.status(201).json({
-                    success: true,
-            message: '頻道建立成功',
-            channel: newChannel
-        });
+        // 回傳去除敏感資訊
+        const { apiKeyEnc, channelSecretEnc, ...safe } = newChannel;
+        res.status(201).json({ success: true, message: '頻道建立成功', channel: safe });
         
     } catch (error) {
         console.error('建立頻道錯誤:', error);
@@ -1766,9 +1767,19 @@ app.get('/api/channels', authenticateJWT, (req, res) => {
     try {
         loadDatabase();
         
-        const userChannels = (database.channels || []).filter(
-            channel => channel.userId === req.staff.id
-        );
+        const userChannels = (database.channels || [])
+            .filter(channel => channel.userId === req.staff.id)
+            .map(c => ({
+                id: c.id,
+                userId: undefined,
+                name: c.name,
+                platform: c.platform,
+                webhookUrl: c.webhookUrl || '',
+                isActive: !!c.isActive,
+                hasCredentials: !!c.hasCredentials || !!c.apiKeyEnc || !!c.channelSecretEnc,
+                createdAt: c.createdAt,
+                updatedAt: c.updatedAt
+            }));
 
         res.json({
             success: true,
@@ -1803,14 +1814,16 @@ app.put('/api/channels/:id', authenticateJWT, (req, res) => {
             });
         }
         
+        const current = database.channels[channelIndex];
         const updatedChannel = {
-            ...database.channels[channelIndex],
-            name: name || database.channels[channelIndex].name,
-            platform: platform || database.channels[channelIndex].platform,
-            apiKey: apiKey || database.channels[channelIndex].apiKey,
-            channelSecret: channelSecret || database.channels[channelIndex].channelSecret,
-            webhookUrl: webhookUrl || database.channels[channelIndex].webhookUrl,
-            isActive: isActive !== undefined ? isActive : database.channels[channelIndex].isActive,
+            ...current,
+            name: name || current.name,
+            platform: platform || current.platform,
+            apiKeyEnc: apiKey ? (encryptSensitive(apiKey) || current.apiKeyEnc) : current.apiKeyEnc,
+            channelSecretEnc: channelSecret ? (encryptSensitive(channelSecret) || current.channelSecretEnc) : current.channelSecretEnc,
+            hasCredentials: current.hasCredentials || !!apiKey || !!channelSecret,
+            webhookUrl: webhookUrl || current.webhookUrl,
+            isActive: isActive !== undefined ? isActive : current.isActive,
             updatedAt: new Date().toISOString()
         };
         
@@ -1819,11 +1832,8 @@ app.put('/api/channels/:id', authenticateJWT, (req, res) => {
 
         console.log('✅ 頻道更新成功:', updatedChannel.name);
 
-        res.json({
-            success: true,
-            message: '頻道更新成功',
-            channel: updatedChannel
-        });
+        const { apiKeyEnc, channelSecretEnc, ...safe } = updatedChannel;
+        res.json({ success: true, message: '頻道更新成功', channel: safe });
         
     } catch (error) {
         console.error('更新頻道錯誤:', error);
