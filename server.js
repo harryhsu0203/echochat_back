@@ -1840,7 +1840,7 @@ app.post('/api/public-chat', async (req, res) => {
             return res.json({ success: true, reply: `${desc}\n\n目前為公開對話測試模式，若需更進一步協助，請前往聯繫我們頁面。` });
         }
 
-        const systemPrompt = `你是本網站的 SaaS 客服助理。\n- 產品定位: 提供讓商家在本平台串接 AI 到自家客服的雲端 SaaS 服務。\n- 回答要求: 以自然中文、條列清楚、可引用平台功能、方案與使用場景；必要時引導至聯繫我們。\n- 若用戶詢問方案，請概述方案差異與適合對象（若有價格資訊可簡述，否則以定位描述）。\n\n【網站內容摘要（多頁彙整）】\n${siteContext}`;
+        const systemPrompt = `你是本網站的 SaaS 客服助理。\n任務: 嚴格根據「網站內容摘要」回覆。不得臆測或補完未出現在內容中的資訊；若內容未涵蓋，請明確回覆「本站未提供相關資訊」，並可引導使用者至聯繫我們。\n表達: 使用繁體中文，重點以條列為主，必要時給出簡短總結。\n主題: 說明平台是讓商家在本網站上將 AI 串接進自家客服（網站/社群/LINE 等）的 SaaS。當被問到「方案/價格」時，只能引用內容摘要中可得的方案與價格，不可猜測。\n\n【網站內容摘要（多頁彙整）】\n${siteContext}`;
         const messages = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: message }
@@ -1850,7 +1850,8 @@ app.post('/api/public-chat', async (req, res) => {
             model: process.env.PUBLIC_CHAT_MODEL || 'gpt-4o-mini',
             messages,
             max_tokens: 600,
-            temperature: 0.7
+            temperature: 0.2,
+            top_p: 0.9
         }, {
             headers: {
                 Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
