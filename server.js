@@ -1454,9 +1454,18 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
                 return { item: k, score };
             }).filter(s => s.score > 0);
             scored.sort((a, b) => b.score - a.score);
-            const top = scored.slice(0, 5).map(s => s.item);
+            let top = scored.slice(0, 5).map(s => s.item);
+            // 若無關鍵字匹配，退回使用最新的知識庫項目（提升體感）
+            if (top.length === 0 && userKnowledge.length > 0) {
+                const sortedByTime = [...userKnowledge].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+                top = sortedByTime.slice(0, 3);
+            }
             if (top.length) {
                 knowledgeContext = top.map((k, idx) => `【來源${idx + 1}】Q: ${k.question}\nA: ${k.answer}`).join('\n\n');
+                // 控制上下文長度，避免超限
+                if (knowledgeContext.length > 4000) {
+                    knowledgeContext = knowledgeContext.slice(0, 4000);
+                }
             }
         } catch (e) {
             console.warn('知識檢索失敗，將不帶入上下文:', e.message);
