@@ -19,6 +19,8 @@ const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 const { parseStringPromise } = require('xml2js');
+const { parse: parseCsv } = require('csv-parse/sync');
+const XLSX = require('xlsx');
 
 // 初始化 Express 應用
 const app = express();
@@ -96,6 +98,7 @@ app.use('/api/login', loginLimiter);
 app.use('/webhook', express.raw({ type: '*/*' }));
 app.use(express.json({ limit: '200kb' }));
 app.use(express.urlencoded({ extended: true, limit: '200kb' }));
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 // ========= 敏感資訊加解密（AES-256-GCM） =========
 function getEncryptionKey() {
@@ -645,6 +648,54 @@ app.post('/api/knowledge/import/sitemap', authenticateJWT, async (req, res) => {
     } catch (error) {
         console.error('Sitemap 匯入失敗:', error.message);
         return res.status(500).json({ success: false, error: '匯入失敗', details: error.message });
+    }
+});
+
+// 從 CSV/XLSX 匯入（每列需包含 question, answer 欄位）
+app.post('/api/knowledge/import/file', authenticateJWT, upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ success: false, error: '缺少檔案' });
+        const mime = req.file.mimetype || '';
+        const buf = req.file.buffer;
+        let rows = [];
+        if (mime.includes('csv') || req.file.originalname.toLowerCase().endsWith('.csv')) {
+            const text = buf.toString('utf8');
+            rows = parseCsv(text, { columns: true, skip_empty_lines: true });
+        } else if (mime.includes('excel') || mime.includes('spreadsheet') || /\.xlsx?$/i.test(req.file.originalname)) {
+            const wb = XLSX.read(buf, { type: 'buffer' });
+            const sheet = wb.Sheets[wb.SheetNames[0]];
+            rows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+        } else if (mime.includes('json') || req.file.originalname.toLowerCase().endsWith('.json')) {
+            rows = JSON.parse(buf.toString('utf8'));
+        } else {
+            return res.status(400).json({ success: false, error: '不支援的檔案格式' });
+        }
+
+        loadDatabase();
+        if (!database.knowledge) database.knowledge = [];
+        let created = 0;
+        const baseId = database.knowledge.length ? Math.max(...database.knowledge.map(k => k.id || 0)) + 1 : 1;
+        let idCursor = baseId;
+        for (const r of rows) {
+            const q = r.question || r.Q || r.title || '';
+            const a = r.answer || r.A || r.content || '';
+            if (!q || !a) continue;
+            database.knowledge.push({
+                id: idCursor++,
+                question: String(q),
+                answer: String(a),
+                category: 'upload',
+                tags: 'imported,file',
+                created_at: new Date().toISOString(),
+                user_id: req.staff?.id || null
+            });
+            created++;
+        }
+        saveDatabase();
+        return res.json({ success: true, createdCount: created });
+    } catch (e) {
+        console.error('檔案匯入失敗:', e.message);
+        return res.status(500).json({ success: false, error: '匯入失敗', details: e.message });
     }
 });
 
