@@ -1832,7 +1832,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
 // 公開聊天端點（供首頁使用）：不需要登入，使用基本網站描述作為上下文
 app.post('/api/public-chat', async (req, res) => {
     try {
-        const { message } = req.body || {};
+        const { message, messages } = req.body || {};
         if (!message || typeof message !== 'string') {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
         }
@@ -1849,14 +1849,23 @@ app.post('/api/public-chat', async (req, res) => {
         }
 
         const systemPrompt = `你是本網站的 SaaS 客服助理。\n任務: 嚴格根據「網站內容摘要」回覆。不得臆測或補完未出現在內容中的資訊；若內容未涵蓋，請明確回覆「本站未提供相關資訊」，並可引導使用者至聯繫我們。\n表達: 使用繁體中文，重點以條列為主，必要時給出簡短總結。\n主題: 說明平台是讓商家在本網站上將 AI 串接進自家客服（網站/社群/LINE 等）的 SaaS。當被問到「方案/價格」時，只能引用內容摘要中可得的方案與價格，不可猜測。\n\n【網站內容摘要（多頁彙整）】\n${siteContext}`;
-        const messages = [
+        // 前端可傳入歷史訊息，這裡做基本清洗與截斷
+        let history = [];
+        if (Array.isArray(messages)) {
+            history = messages
+                .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+                .slice(-10); // 保留最近 10 則
+        }
+
+        const chatMessages = [
             { role: 'system', content: systemPrompt },
+            ...history,
             { role: 'user', content: message }
         ];
 
         const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
             model: process.env.PUBLIC_CHAT_MODEL || 'gpt-4o-mini',
-            messages,
+            messages: chatMessages,
             max_tokens: 600,
             temperature: 0.2,
             top_p: 0.9
