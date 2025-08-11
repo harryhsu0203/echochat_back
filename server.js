@@ -39,6 +39,69 @@ const ECPAY_ACTION = process.env.ECPAY_ACTION || (ECPAY_MODE === 'Prod'
     ? 'https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5'
     : 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5');
 
+// ====== Token 計費/用量機制 ======
+const PLAN_TOKEN_MONTHLY = {
+    free: 20000,        // 例：2 萬 tokens / 月
+    basic: 100000,      // 10 萬
+    pro: 300000,        // 30 萬
+    professional: 300000,
+    premium: 600000,    // 60 萬
+    business: 1000000,  // 100 萬
+    enterprise: 3000000 // 300 萬
+};
+
+function getUserById(userId) {
+    return (database.staff_accounts || []).find(u => u.id === userId);
+}
+
+function getPlanAllowance(plan) {
+    return PLAN_TOKEN_MONTHLY[(plan || 'free').toLowerCase()] || PLAN_TOKEN_MONTHLY.free;
+}
+
+function getNow() { return new Date(); }
+
+function addMonths(date, months) {
+    const d = new Date(date.getTime());
+    d.setMonth(d.getMonth() + months);
+    return d;
+}
+
+function ensureUserTokenFields(user) {
+    if (!user) return;
+    if (typeof user.token_used_in_cycle !== 'number') user.token_used_in_cycle = 0;
+    if (typeof user.token_bonus_balance !== 'number') user.token_bonus_balance = 0;
+    if (!user.billing_cycle_start) user.billing_cycle_start = user.created_at || new Date().toISOString();
+    if (!user.next_billing_at) user.next_billing_at = addMonths(new Date(user.billing_cycle_start), 1).toISOString();
+}
+
+function maybeResetCycle(user) {
+    ensureUserTokenFields(user);
+    const now = getNow();
+    if (now > new Date(user.next_billing_at)) {
+        // 進入新週期：歸零用量、推進下一個計費日（+1 個月）
+        user.token_used_in_cycle = 0;
+        // 如果過了多個月，逐月推進
+        let next = new Date(user.next_billing_at);
+        while (now > next) {
+            next = addMonths(next, 1);
+        }
+        user.billing_cycle_start = addMonths(next, -1).toISOString();
+        user.next_billing_at = next.toISOString();
+        saveDatabase();
+    }
+}
+
+// 粗略估算 tokens（字數/3 + buffer）
+function estimateTokens(text) {
+    if (!text) return 0;
+    const len = String(text).length;
+    return Math.ceil(len / 3);
+}
+
+function estimateChatTokens(message, knowledgeContext, replyMax = 600) {
+    return estimateTokens(message) + estimateTokens(knowledgeContext) + replyMax; // 粗估
+}
+
 // ====== 公開聊天：網站內容快取（避免每次都抓取多頁）======
 let MULTIPAGE_SITE_CONTEXT_CACHE = { text: '', fetchedAt: 0, baseUrl: '' };
 const CONTEXT_TTL_MS = 10 * 60 * 1000; // 10 分鐘
@@ -1467,7 +1530,22 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         saveDatabase();
 
         console.log('✅ AI 助理配置已更新(使用者):', req.staff.username);
-        res.json({ success: true, message: 'AI 助理配置已成功更新', config });
+        // 附帶目前 token 狀態
+        const user = getUserById(req.staff.id);
+        ensureUserTokenFields(user);
+        maybeResetCycle(user);
+        res.json({
+            success: true,
+            message: 'AI 助理配置已成功更新',
+            config,
+            token: {
+                plan: user?.plan || 'free',
+                allowance: getPlanAllowance(user?.plan || 'free'),
+                used_in_cycle: user.token_used_in_cycle || 0,
+                bonus_balance: user.token_bonus_balance || 0,
+                next_billing_at: user.next_billing_at
+            }
+        });
     } catch (error) {
         console.error('更新 AI 助理配置錯誤:', error);
         res.status(500).json({
@@ -1695,6 +1773,27 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
 
         console.log('使用的模型:', aiConfig.llm || 'gpt-3.5-turbo');
         
+        // 計算本次大致 token 需求，若不足則嘗試使用儲值 token
+        const user = getUserById(req.staff.id);
+        ensureUserTokenFields(user);
+        maybeResetCycle(user);
+        const planAllowance = getPlanAllowance(user?.plan || 'free');
+        const estimatedTokens = estimateChatTokens(message, knowledgeContext, 600);
+        const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
+        if (availableThisCycle < estimatedTokens) {
+            return res.status(402).json({
+                success: false,
+                error: '餘額不足，請儲值 Token 後再試',
+                details: {
+                    plan: user?.plan || 'free',
+                    planAllowance,
+                    used: user.token_used_in_cycle || 0,
+                    bonus: user.token_bonus_balance || 0,
+                    need: estimatedTokens
+                }
+            });
+        }
+
         // 調用 OpenAI API
         const openaiResponse = await axios.post(
             'https://api.openai.com/v1/chat/completions',
@@ -1713,6 +1812,18 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         );
 
         const aiReply = openaiResponse.data.choices[0].message.content.trim();
+
+        // 扣除 tokens（先扣月度，若不足則扣儲值）
+        let remainingNeed = estimatedTokens;
+        const cycleRemain = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0);
+        const useFromCycle = Math.min(cycleRemain, remainingNeed);
+        user.token_used_in_cycle = (user.token_used_in_cycle || 0) + useFromCycle;
+        remainingNeed -= useFromCycle;
+        if (remainingNeed > 0) {
+            user.token_bonus_balance = Math.max((user.token_bonus_balance || 0) - remainingNeed, 0);
+            remainingNeed = 0;
+        }
+        saveDatabase();
 
         // 更新對話歷史
         const newMessage = {
