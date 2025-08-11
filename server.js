@@ -201,7 +201,8 @@ let database = {
     chat_history: [],
     ai_assistant_config: [],
     email_verifications: [], // 儲存電子郵件驗證碼
-    password_reset_requests: [] // 儲存密碼重設請求
+    password_reset_requests: [], // 儲存密碼重設請求
+    line_api_settings: [] // 每位使用者的 LINE Token 設定
 };
 
 // 載入現有資料
@@ -220,7 +221,8 @@ const loadDatabase = () => {
                 chat_history: loadedData.chat_history || [],
                 ai_assistant_config: loadedData.ai_assistant_config || [],
                 email_verifications: loadedData.email_verifications || [],
-                password_reset_requests: loadedData.password_reset_requests || []
+                password_reset_requests: loadedData.password_reset_requests || [],
+                line_api_settings: loadedData.line_api_settings || []
             };
         }
     } catch (error) {
@@ -2266,20 +2268,28 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
 // ==================== LINE API 設定與 Webhook ====================
 
 // LINE API 設定儲存 (用戶專用)
-let lineAPISettings = {}; // 格式: { userId: { channelAccessToken, channelSecret, webhookUrl } }
+let lineAPISettings = {}; // 仍保留快取，但以 database.line_api_settings 作持久化
 
 // 獲取 LINE API 設定
 app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
     try {
         const userId = req.staff.id;
-        const settings = lineAPISettings[userId] || {};
-        
+        loadDatabase();
+        const record = (database.line_api_settings || []).find(r => r.user_id === userId);
+        const settings = record || {};
+        // 更新快取
+        lineAPISettings[userId] = {
+            channelAccessToken: settings.channel_access_token || '',
+            channelSecret: settings.channel_secret || '',
+            webhookUrl: settings.webhook_url || ''
+        };
+
         res.json({
             success: true,
             data: {
-                channelAccessToken: settings.channelAccessToken || '',
-                channelSecret: settings.channelSecret || '',
-                webhookUrl: settings.webhookUrl || ''
+                channelAccessToken: lineAPISettings[userId].channelAccessToken,
+                channelSecret: lineAPISettings[userId].channelSecret,
+                webhookUrl: lineAPISettings[userId].webhookUrl
             }
         });
     } catch (error) {
@@ -2303,15 +2313,27 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
                 error: '請提供 Channel Access Token 和 Channel Secret'
             });
         }
-        
-        // 保存設定
+
+        loadDatabase();
+        if (!database.line_api_settings) database.line_api_settings = [];
+        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        const record = {
+            user_id: userId,
+            channel_access_token: channelAccessToken,
+            channel_secret: channelSecret,
+            webhook_url: webhookUrl || `${req.protocol}://${req.get('host')}/api/webhook/line/${userId}`,
+            updated_at: new Date().toISOString()
+        };
+        if (idx >= 0) database.line_api_settings[idx] = record; else database.line_api_settings.push(record);
+        saveDatabase();
+
         lineAPISettings[userId] = {
             channelAccessToken,
             channelSecret,
-            webhookUrl: webhookUrl || `${req.protocol}://${req.get('host')}/api/webhook/line/${userId}`,
-            updatedAt: new Date().toISOString()
+            webhookUrl: record.webhook_url,
+            updatedAt: record.updated_at
         };
-        
+
         res.json({
             success: true,
             message: 'LINE API 設定保存成功',
@@ -2353,12 +2375,29 @@ app.post('/api/user/webhook-url', authenticateJWT, async (req, res) => {
     try {
         const userId = req.staff.id;
         const { webhookUrl } = req.body;
-        
-        if (lineAPISettings[userId]) {
-            lineAPISettings[userId].webhookUrl = webhookUrl;
-            lineAPISettings[userId].updatedAt = new Date().toISOString();
+
+        loadDatabase();
+        if (!database.line_api_settings) database.line_api_settings = [];
+        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        if (idx >= 0) {
+            database.line_api_settings[idx].webhook_url = webhookUrl;
+            database.line_api_settings[idx].updated_at = new Date().toISOString();
+        } else {
+            database.line_api_settings.push({
+                user_id: userId,
+                channel_access_token: '',
+                channel_secret: '',
+                webhook_url: webhookUrl,
+                updated_at: new Date().toISOString()
+            });
         }
-        
+        saveDatabase();
+
+        lineAPISettings[userId] = {
+            ...(lineAPISettings[userId] || {}),
+            webhookUrl
+        };
+
         res.json({
             success: true,
             message: 'Webhook URL 更新成功',
