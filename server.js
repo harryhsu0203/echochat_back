@@ -19,6 +19,7 @@ const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 const { parseStringPromise } = require('xml2js');
+const zlib = require('zlib');
 const { parse: parseCsv } = require('csv-parse/sync');
 const XLSX = require('xlsx');
 
@@ -592,18 +593,86 @@ app.post('/api/knowledge/import/sitemap', authenticateJWT, async (req, res) => {
             return res.status(400).json({ success: false, error: '請提供站點地圖網址' });
         }
 
-        const resp = await axios.get(sitemapUrl, { timeout: 15000, headers: { 'User-Agent': 'EchoChatBot/1.0' } });
-        const xml = resp.data;
-        const parsed = await parseStringPromise(xml);
-        const urls = (parsed.urlset && parsed.urlset.url ? parsed.urlset.url : [])
-            .map(u => (u.loc && u.loc[0]) || null)
-            .filter(Boolean)
-            .slice(0, Math.max(1, Math.min(maxPages, 200)));
+        // 下載 sitemap（支援 .xml 與 .xml.gz）
+        let xmlText;
+        try {
+            const isGzip = /\.gz$/i.test(sitemapUrl);
+            const resp = await axios.get(sitemapUrl, {
+                timeout: 20000,
+                responseType: isGzip ? 'arraybuffer' : 'text',
+                headers: { 'User-Agent': 'EchoChatBot/1.1' }
+            });
+            if (isGzip || (resp.headers && /gzip/i.test(resp.headers['content-encoding'] || ''))) {
+                const buf = Buffer.isBuffer(resp.data) ? resp.data : Buffer.from(resp.data);
+                xmlText = zlib.gunzipSync(buf).toString('utf8');
+            } else {
+                xmlText = typeof resp.data === 'string' ? resp.data : resp.data.toString('utf8');
+            }
+        } catch (fetchErr) {
+            console.error('下載 sitemap 失敗:', fetchErr.message);
+            return res.status(500).json({ success: false, error: '無法下載站點地圖', details: fetchErr.message });
+        }
 
+        // 解析 sitemap
+        let parsed;
+        try {
+            parsed = await parseStringPromise(xmlText);
+        } catch (parseErr) {
+            console.error('解析 sitemap XML 失敗:', parseErr.message);
+            return res.status(500).json({ success: false, error: '站點地圖格式錯誤', details: parseErr.message });
+        }
+
+        // 可能是 urlset 或 sitemapindex
+        const urls = [];
+        const limitPages = Math.max(1, Math.min(maxPages, 500));
+
+        const collectFromUrlset = (node) => {
+            const list = (node && node.url) || [];
+            for (const u of list) {
+                const loc = (u.loc && u.loc[0]) || null;
+                if (loc) urls.push(loc);
+                if (urls.length >= limitPages) break;
+            }
+        };
+
+        if (parsed.urlset) {
+            collectFromUrlset(parsed.urlset);
+        } else if (parsed.sitemapindex && Array.isArray(parsed.sitemapindex.sitemap)) {
+            // 先抓取子 sitemap，再收集 url
+            const children = parsed.sitemapindex.sitemap
+                .map(s => (s.loc && s.loc[0]) || null)
+                .filter(Boolean)
+                .slice(0, 20); // 避免展開過多層
+            for (const child of children) {
+                try {
+                    const isGz = /\.gz$/i.test(child);
+                    const r = await axios.get(child, {
+                        timeout: 20000,
+                        responseType: isGz ? 'arraybuffer' : 'text',
+                        headers: { 'User-Agent': 'EchoChatBot/1.1' }
+                    });
+                    const text = isGz || (r.headers && /gzip/i.test(r.headers['content-encoding'] || ''))
+                        ? zlib.gunzipSync(Buffer.isBuffer(r.data) ? r.data : Buffer.from(r.data)).toString('utf8')
+                        : (typeof r.data === 'string' ? r.data : r.data.toString('utf8'));
+                    const sub = await parseStringPromise(text);
+                    if (sub.urlset) collectFromUrlset(sub.urlset);
+                    if (urls.length >= limitPages) break;
+                } catch (childErr) {
+                    console.warn('讀取子 sitemap 失敗:', child, childErr.message);
+                }
+            }
+        }
+
+        const targetUrls = urls.slice(0, limitPages);
+        if (targetUrls.length === 0) {
+            return res.status(400).json({ success: false, error: '站點地圖中未找到任何頁面 URL' });
+        }
+
+        // 逐頁抓取內容並寫入知識庫
         const allCreated = [];
-        for (const pageUrl of urls) {
+        for (const pageUrl of targetUrls) {
             try {
-                const page = await axios.get(pageUrl, { timeout: 15000, headers: { 'User-Agent': 'EchoChatBot/1.0' } });
+                const page = await axios.get(pageUrl, { timeout: 20000, headers: { 'User-Agent': 'EchoChatBot/1.1' } });
                 const $ = cheerio.load(page.data);
                 const title = ($('title').first().text() || pageUrl).trim();
                 const paragraphs = [];
