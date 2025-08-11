@@ -137,6 +137,42 @@ async function buildMultipageSiteContext(baseUrl) {
     return text;
 }
 
+async function resolveBaseUrl() {
+    const candidates = [];
+    if (process.env.PUBLIC_SITE_URL) candidates.push(process.env.PUBLIC_SITE_URL);
+    candidates.push('https://echochat-frontend.onrender.com');
+    candidates.push('https://echochat-web.onrender.com');
+    for (const url of candidates) {
+        const html = await fetchHtml(url);
+        if (html && html.length > 200) return url.replace(/\/$/, '');
+    }
+    return candidates[0] || 'https://echochat-frontend.onrender.com';
+}
+
+async function fetchI18nPricing(baseUrl) {
+    try {
+        const url = baseUrl.replace(/\/$/, '') + '/js/i18n.js';
+        const js = await fetchHtml(url);
+        if (!js) return '';
+        // 取 zh-TW 區塊
+        const zhStart = js.indexOf("'zh-TW'");
+        const enStart = js.indexOf("'en'", zhStart + 1);
+        const zhBlock = zhStart !== -1 ? js.slice(zhStart, enStart !== -1 ? enStart : undefined) : js;
+        const lines = [];
+        const priceRe = /'pricing\.(basic|pro|professional|enterprise)\.price'\s*:\s*'([^']+)'/g;
+        let m;
+        while ((m = priceRe.exec(zhBlock)) !== null) {
+            const planKey = m[1];
+            const planMap = { basic: '基礎版', pro: '專業版', professional: '專業版', enterprise: '企業版' };
+            const planName = planMap[planKey] || planKey;
+            lines.push(`${planName}: ${m[2]}`);
+        }
+        return lines.length ? `【方案與定價(翻譯檔)】\n${lines.join('\n')}` : '';
+    } catch {
+        return '';
+    }
+}
+
 // Google OAuth 配置
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -1794,8 +1830,10 @@ app.post('/api/public-chat', async (req, res) => {
         }
 
         // 萃取多頁內容（首頁/產品/特色/使用場景/定價/關於我們）
-        const baseUrl = process.env.PUBLIC_SITE_URL || 'https://echochat-frontend.onrender.com';
-        const siteContext = await buildMultipageSiteContext(baseUrl);
+        const baseUrl = await resolveBaseUrl();
+        const siteContextBase = await buildMultipageSiteContext(baseUrl);
+        const pricingFromI18n = await fetchI18nPricing(baseUrl);
+        const siteContext = [siteContextBase, pricingFromI18n].filter(Boolean).join('\n\n');
 
         if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.startsWith('sk-')) {
             const desc = siteContext || 'EchoChat 提供 AI 客服、LINE/網站整合、知識庫導入與自動回覆，協助企業快速上線智慧客服。';
