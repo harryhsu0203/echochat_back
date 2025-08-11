@@ -1450,24 +1450,24 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
             updated_at: new Date().toISOString()
         };
         
-        // 如果是第一個配置，添加創建時間
-        if (database.ai_assistant_config.length === 0) {
-            config.created_at = new Date().toISOString();
-        } else {
-            config.created_at = database.ai_assistant_config[0].created_at;
+        loadDatabase();
+        if (!Array.isArray(database.ai_assistant_configs)) {
+            database.ai_assistant_configs = [];
         }
-        
-        // 更新或創建配置（只保留一個配置）
-        database.ai_assistant_config = [config];
+        const userId = req.staff.id;
+        const idx = database.ai_assistant_configs.findIndex(c => c.user_id === userId);
+        if (idx === -1) {
+            config.created_at = new Date().toISOString();
+            database.ai_assistant_configs.push({ user_id: userId, config });
+        } else {
+            const prev = database.ai_assistant_configs[idx].config || {};
+            config.created_at = prev.created_at || new Date().toISOString();
+            database.ai_assistant_configs[idx].config = config;
+        }
         saveDatabase();
-        
-        console.log('✅ AI 助理配置已更新:', config.assistant_name);
-        
-        res.json({
-            success: true,
-            message: 'AI 助理配置已成功更新',
-            config: config
-        });
+
+        console.log('✅ AI 助理配置已更新(使用者):', req.staff.username);
+        res.json({ success: true, message: 'AI 助理配置已成功更新', config });
     } catch (error) {
         console.error('更新 AI 助理配置錯誤:', error);
         res.status(500).json({
@@ -1481,31 +1481,32 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
 app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     try {
         const defaultConfig = {
-            assistant_name: '設計師 Rainy',
-                            llm: 'gpt-3.5-turbo',
+            assistant_name: 'AI 助理',
+            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
-            description: 'OBJECTIVE(目標任務):\n你的目標是客戶服務與美容美髮發行錄，創造一個良好的對話體驗，讓客戶感到舒適，願意分享他們的真實想法及需求。\n\nSTYLE(風格/個性):\n你的個性是很健談並且很直率人保學會存在，樂於創造一個放鬆和友好的氣圍。\n\nTONE(語調):\n親性、溫柔、深情人心。',
+            description: '我是您的智能客服助理，很高興為您服務！',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };
-        
-        // 重置為預設配置
-        database.ai_assistant_config = [defaultConfig];
+
+        loadDatabase();
+        if (!Array.isArray(database.ai_assistant_configs)) {
+            database.ai_assistant_configs = [];
+        }
+        const userId = req.staff.id;
+        const idx = database.ai_assistant_configs.findIndex(c => c.user_id === userId);
+        if (idx === -1) {
+            database.ai_assistant_configs.push({ user_id: userId, config: defaultConfig });
+        } else {
+            database.ai_assistant_configs[idx].config = defaultConfig;
+        }
         saveDatabase();
-        
-        console.log('✅ AI 助理配置已重置為預設值');
-        
-        res.json({
-            success: true,
-            message: 'AI 助理配置已重置為預設值',
-            config: defaultConfig
-        });
+
+        console.log('✅ AI 助理配置已重置為預設值(使用者):', req.staff.username);
+        res.json({ success: true, message: 'AI 助理配置已重置為預設值', config: defaultConfig });
     } catch (error) {
         console.error('重置 AI 助理配置錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '重置配置失敗'
-        });
+        res.status(500).json({ success: false, error: '重置配置失敗' });
     }
 });
 
