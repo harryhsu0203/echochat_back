@@ -3,6 +3,7 @@ const fs = require('fs');
 // 移除資料庫依賴，使用 JSON 檔案儲存
 const { Client, middleware } = require('@line/bot-sdk');
 const axios = require('axios');
+const cheerio = require('cheerio');
 const path = require('path');
 const { ImageAnnotatorClient } = require('@google-cloud/vision');
 const { OAuth2Client } = require('google-auth-library');
@@ -17,6 +18,7 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
+const { parseStringPromise } = require('xml2js');
 
 // 初始化 Express 應用
 const app = express();
@@ -51,6 +53,7 @@ app.use(cors({
         'https://echochat-web.vercel.app',
         'https://echochat-app.vercel.app',
         'https://echochat-frontend.onrender.com',
+        'https://echochat-backend.onrender.com',
         'https://echochat-web.onrender.com',
         // 自訂網域
         'https://echochat.com.tw',
@@ -467,6 +470,133 @@ app.delete('/api/knowledge/:id', authenticateJWT, (req, res) => {
         res.json({ success: true, item: removed });
     } catch (error) {
         res.status(500).json({ success: false, error: '刪除知識失敗' });
+    }
+});
+
+// 從單一網址匯入知識
+app.post('/api/knowledge/import/url', authenticateJWT, async (req, res) => {
+    try {
+        const { url, maxItems = 20 } = req.body || {};
+        if (!url) {
+            return res.status(400).json({ success: false, error: '請提供要匯入的網址' });
+        }
+
+        // 抓取 HTML
+        const response = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'EchoChatBot/1.0' } });
+        const html = response.data;
+        const $ = cheerio.load(html);
+
+        // 取 <title> 與主要文字
+        const title = ($('title').first().text() || url).trim();
+        const paragraphs = [];
+        $('p').each((_, el) => {
+            const text = $(el).text().trim();
+            if (text && text.length > 20) {
+                paragraphs.push(text);
+            }
+        });
+
+        // 切分成 Q&A（簡單策略：用標題作為問題，段落合併作為答案）
+        const combined = paragraphs.join('\n');
+        const chunks = [];
+        const chunkSize = 800;
+        for (let i = 0; i < combined.length; i += chunkSize) {
+            chunks.push(combined.slice(i, i + chunkSize));
+        }
+
+        loadDatabase();
+        if (!database.knowledge) database.knowledge = [];
+        const created = [];
+        const baseId = database.knowledge.length ? Math.max(...database.knowledge.map(k => k.id || 0)) + 1 : 1;
+        const limit = Math.max(1, Math.min(maxItems, chunks.length));
+        for (let i = 0; i < limit; i++) {
+            const id = baseId + i;
+            const item = {
+                id,
+                question: `${title}（第 ${i + 1} 部分）`,
+                answer: chunks[i],
+                category: 'webpage',
+                tags: 'imported,url',
+                created_at: new Date().toISOString(),
+                user_id: req.staff?.id || null,
+                source_url: url
+            };
+            database.knowledge.push(item);
+            created.push(item);
+        }
+
+        saveDatabase();
+        return res.json({ success: true, createdCount: created.length, items: created });
+    } catch (error) {
+        console.error('URL 匯入失敗:', error.message);
+        return res.status(500).json({ success: false, error: '匯入失敗', details: error.message });
+    }
+});
+
+// 從 Sitemap 匯入（.xml）
+app.post('/api/knowledge/import/sitemap', authenticateJWT, async (req, res) => {
+    try {
+        const { sitemapUrl, maxPages = 20, perPageItems = 5 } = req.body || {};
+        if (!sitemapUrl) {
+            return res.status(400).json({ success: false, error: '請提供站點地圖網址' });
+        }
+
+        const resp = await axios.get(sitemapUrl, { timeout: 15000, headers: { 'User-Agent': 'EchoChatBot/1.0' } });
+        const xml = resp.data;
+        const parsed = await parseStringPromise(xml);
+        const urls = (parsed.urlset && parsed.urlset.url ? parsed.urlset.url : [])
+            .map(u => (u.loc && u.loc[0]) || null)
+            .filter(Boolean)
+            .slice(0, Math.max(1, Math.min(maxPages, 200)));
+
+        const allCreated = [];
+        for (const pageUrl of urls) {
+            try {
+                const page = await axios.get(pageUrl, { timeout: 15000, headers: { 'User-Agent': 'EchoChatBot/1.0' } });
+                const $ = cheerio.load(page.data);
+                const title = ($('title').first().text() || pageUrl).trim();
+                const paragraphs = [];
+                $('p').each((_, el) => {
+                    const text = $(el).text().trim();
+                    if (text && text.length > 20) paragraphs.push(text);
+                });
+                const combined = paragraphs.join('\n');
+                if (!combined) continue;
+                const chunks = [];
+                const chunkSize = 800;
+                for (let i = 0; i < combined.length; i += chunkSize) {
+                    chunks.push(combined.slice(i, i + chunkSize));
+                }
+                const limit = Math.min(perPageItems, chunks.length);
+
+                loadDatabase();
+                if (!database.knowledge) database.knowledge = [];
+                const baseId = database.knowledge.length ? Math.max(...database.knowledge.map(k => k.id || 0)) + 1 : 1;
+                for (let i = 0; i < limit; i++) {
+                    const id = baseId + i + database.knowledge.length;
+                    const item = {
+                        id,
+                        question: `${title}（第 ${i + 1} 部分）`,
+                        answer: chunks[i],
+                        category: 'webpage',
+                        tags: 'imported,sitemap',
+                        created_at: new Date().toISOString(),
+                        user_id: req.staff?.id || null,
+                        source_url: pageUrl
+                    };
+                    database.knowledge.push(item);
+                    allCreated.push(item);
+                }
+                saveDatabase();
+            } catch (pageErr) {
+                console.warn('抓取頁面失敗:', pageUrl, pageErr.message);
+            }
+        }
+
+        return res.json({ success: true, createdCount: allCreated.length, items: allCreated });
+    } catch (error) {
+        console.error('Sitemap 匯入失敗:', error.message);
+        return res.status(500).json({ success: false, error: '匯入失敗', details: error.message });
     }
 });
 
@@ -1132,9 +1262,35 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             }
         }
 
+        // 基於使用者知識庫做簡單關鍵字檢索，取前 N 筆做為上下文
+        const normalized = (text) => (text || '').toLowerCase();
+        const terms = normalized(message)
+            .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+            .split(/\s+/)
+            .filter(t => t.length >= 2)
+            .slice(0, 20);
+        let knowledgeContext = '';
+        try {
+            const userKnowledge = (database.knowledge || []).filter(
+                k => !k.user_id || k.user_id === req.staff.id
+            );
+            const scored = userKnowledge.map(k => {
+                const text = `${k.question} ${k.answer}`.toLowerCase();
+                const score = terms.reduce((acc, t) => acc + (text.includes(t) ? 1 : 0), 0);
+                return { item: k, score };
+            }).filter(s => s.score > 0);
+            scored.sort((a, b) => b.score - a.score);
+            const top = scored.slice(0, 5).map(s => s.item);
+            if (top.length) {
+                knowledgeContext = top.map((k, idx) => `【來源${idx + 1}】Q: ${k.question}\nA: ${k.answer}`).join('\n\n');
+            }
+        } catch (e) {
+            console.warn('知識檢索失敗，將不帶入上下文:', e.message);
+        }
+
         // 構建完整的對話訊息
         const messages = [
-            { role: 'system', content: systemPrompt },
+            { role: 'system', content: systemPrompt + (knowledgeContext ? `\n\n以下為商家提供的知識庫內容，優先據此回答：\n${knowledgeContext}\n\n若知識庫無相關資訊再自行作答，並標註「一般建議」。` : '') },
             ...conversationHistory,
             { role: 'user', content: message }
         ];
