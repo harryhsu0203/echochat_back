@@ -1687,6 +1687,45 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
     }
 });
 
+// 公開聊天端點（供首頁使用）：不需要登入，使用基本網站描述作為上下文
+app.post('/api/public-chat', async (req, res) => {
+    try {
+        const { message } = req.body || {};
+        if (!message || typeof message !== 'string') {
+            return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
+        }
+
+        if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.startsWith('sk-')) {
+            const desc = 'EchoChat 提供 AI 客服、LINE/網站整合、知識庫導入與自動回覆，協助企業快速上線智慧客服。';
+            return res.json({ success: true, reply: `${desc}\n\n目前為公開對話測試模式，若需更進一步協助，請前往聯繫我們頁面。` });
+        }
+
+        const systemPrompt = '你是本網站的客服助理，請根據網站介紹與功能提供簡潔、友善且實用的回答。';
+        const messages = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: message }
+        ];
+
+        const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+            model: process.env.PUBLIC_CHAT_MODEL || 'gpt-4o-mini',
+            messages,
+            max_tokens: 600,
+            temperature: 0.7
+        }, {
+            headers: {
+                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        const aiReply = openaiResponse.data.choices?.[0]?.message?.content?.trim() || '目前無法提供回覆，請稍後再試。';
+        res.json({ success: true, reply: aiReply });
+    } catch (error) {
+        console.error('公開聊天錯誤(子模組):', error.response?.data || error.message);
+        res.status(500).json({ success: false, error: '服務暫時不可用，請稍後再試' });
+    }
+});
+
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
                 res.json({
