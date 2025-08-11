@@ -839,6 +839,35 @@ app.get('/api/me', authenticateJWT, (req, res) => {
     }
 });
 
+// 取得個人資料（帳戶設定頁使用）
+app.get('/api/profile', authenticateJWT, (req, res) => {
+    try {
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        const { password: _, ...safe } = user;
+        res.json({ success: true, profile: safe });
+    } catch (e) {
+        res.status(500).json({ success: false, error: '無法取得個人資料' });
+    }
+});
+
+// 更新個人資料（可改姓名與 email）
+app.post('/api/profile', authenticateJWT, (req, res) => {
+    try {
+        const { name, email } = req.body || {};
+        loadDatabase();
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        if (typeof name === 'string') user.name = name.trim();
+        if (typeof email === 'string') user.email = email.trim();
+        user.updated_at = new Date().toISOString();
+        saveDatabase();
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false, error: '更新失敗' });
+    }
+});
+
 // 使用者自助升級至尊榮版（模擬付款流程）
 app.post('/api/upgrade', authenticateJWT, (req, res) => {
     try {
