@@ -1471,26 +1471,40 @@ app.post('/api/reset-password', async (req, res) => {
 // 獲取 AI 助理配置
 app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
     try {
-        // 獲取第一個配置，如果沒有則返回預設值
-        const config = database.ai_assistant_config[0] || {
-            assistant_name: '設計師 Rainy',
-                            llm: 'gpt-3.5-turbo',
+        loadDatabase();
+        if (!Array.isArray(database.ai_assistant_configs)) {
+            database.ai_assistant_configs = [];
+        }
+        const userId = req.staff.id;
+        const found = database.ai_assistant_configs.find(c => c.user_id === userId);
+        const defaultConfig = {
+            assistant_name: 'AI 助理',
+            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
-            description: 'OBJECTIVE(目標任務):\n你的目標是客戶服務與美容美髮發行錄，創造一個良好的對話體驗，讓客戶感到舒適，願意分享他們的真實想法及需求。\n\nSTYLE(風格/個性):\n你的個性是很健談並且很直率人保學會存在，樂於創造一個放鬆和友好的氣圍。\n\nTONE(語調):\n親性、溫柔、深情人心。',
+            description: '我是您的智能客服助理，很高興為您服務！',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };
-        
+        const config = found ? found.config : defaultConfig;
+
+        const user = getUserById(userId);
+        ensureUserTokenFields(user);
+        maybeResetCycle(user);
+
         res.json({
             success: true,
-            config: config
+            config,
+            token: {
+                plan: user?.plan || 'free',
+                allowance: getPlanAllowance(user?.plan || 'free', user),
+                used_in_cycle: user?.token_used_in_cycle || 0,
+                bonus_balance: user?.token_bonus_balance || 0,
+                next_billing_at: user?.next_billing_at || null
+            }
         });
     } catch (error) {
         console.error('獲取 AI 助理配置錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '獲取配置失敗'
-        });
+        res.status(500).json({ success: false, error: '獲取配置失敗' });
     }
 });
 
