@@ -39,6 +39,104 @@ const ECPAY_ACTION = process.env.ECPAY_ACTION || (ECPAY_MODE === 'Prod'
     ? 'https://payment.ecpay.com.tw/Cashier/AioCheckOut/V5'
     : 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5');
 
+// ====== 公開聊天：網站內容快取（避免每次都抓取多頁）======
+let MULTIPAGE_SITE_CONTEXT_CACHE = { text: '', fetchedAt: 0, baseUrl: '' };
+const CONTEXT_TTL_MS = 10 * 60 * 1000; // 10 分鐘
+
+async function fetchHtml(url) {
+    try {
+        const resp = await axios.get(url, { timeout: 12000 });
+        return resp.data || '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function summarizeText(str, maxLen = 1000) {
+    if (!str) return '';
+    const s = String(str).replace(/\s+/g, ' ').trim();
+    return s.length > maxLen ? s.slice(0, maxLen) + '…' : s;
+}
+
+function extractFromPage(html, pageLabel) {
+    if (!html) return '';
+    const $ = cheerio.load(html);
+    const parts = [];
+    const metaDesc = $('meta[name="description"]').attr('content');
+    if (metaDesc) parts.push(`描述: ${metaDesc.trim()}`);
+
+    const h1 = $('h1').first().text().trim();
+    if (h1) parts.push(`H1: ${h1}`);
+
+    // 取前三個 H2/H3
+    $('h2, h3').slice(0, 5).each((_, el) => {
+        const t = $(el).text().trim();
+        if (t) parts.push(`• ${t}`);
+    });
+
+    // 特定區塊：hero 與功能卡片
+    const heroTitle = $('h1.hero-title').text().trim();
+    const heroSub = $('p.hero-subtitle').text().trim();
+    const heroDesc = $('p.hero-description').text().trim();
+    if (heroTitle || heroSub || heroDesc) {
+        parts.push(`Hero: ${[heroTitle, heroSub, heroDesc].filter(Boolean).join(' / ')}`);
+    }
+    const features = [];
+    $('.feature-grid .feature-card').each((_, el) => {
+        const h = $(el).find('h3').text().trim();
+        const p = $(el).find('p').text().trim();
+        if (h && p) features.push(`${h}: ${p}`);
+    });
+    if (features.length) parts.push(`功能: ${features.join('；')}`);
+
+    // 定價：抓取包含金額或方案字樣的段落
+    const pricingCandidates = [];
+    $('*').each((_, el) => {
+        const txt = $(el).text().trim();
+        if (!txt) return;
+        if (/\$|NT\$|NT\s*\d|價格|方案|月|年/i.test(txt)) {
+            pricingCandidates.push(txt);
+        }
+    });
+    if (pricingCandidates.length) {
+        const pr = summarizeText([...new Set(pricingCandidates)].join(' / '), 600);
+        if (pr) parts.push(`定價摘要: ${pr}`);
+    }
+
+    const bodyText = summarizeText($('main').text() || $('body').text(), 800);
+    if (bodyText) parts.push(`其他: ${bodyText}`);
+
+    const combined = parts.filter(Boolean).join('\n');
+    return combined ? `【${pageLabel}】\n${combined}` : '';
+}
+
+async function buildMultipageSiteContext(baseUrl) {
+    // 使用快取
+    if (MULTIPAGE_SITE_CONTEXT_CACHE.text && MULTIPAGE_SITE_CONTEXT_CACHE.baseUrl === baseUrl && Date.now() - MULTIPAGE_SITE_CONTEXT_CACHE.fetchedAt < CONTEXT_TTL_MS) {
+        return MULTIPAGE_SITE_CONTEXT_CACHE.text;
+    }
+
+    const pages = [
+        { path: '/', label: '首頁' },
+        { path: '/products.html', label: '產品' },
+        { path: '/features.html', label: '特色' },
+        { path: '/use-cases.html', label: '使用場景' },
+        { path: '/pricing.html', label: '方案與定價' },
+        { path: '/about-us.html', label: '關於我們' }
+    ];
+
+    const sections = [];
+    for (const p of pages) {
+        const url = baseUrl.replace(/\/$/, '') + p.path;
+        const html = await fetchHtml(url);
+        const sec = extractFromPage(html, p.label);
+        if (sec) sections.push(sec);
+    }
+    const text = sections.join('\n\n');
+    MULTIPAGE_SITE_CONTEXT_CACHE = { text, fetchedAt: Date.now(), baseUrl };
+    return text;
+}
+
 // Google OAuth 配置
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
@@ -1695,42 +1793,16 @@ app.post('/api/public-chat', async (req, res) => {
             return res.status(400).json({ success: false, error: '請提供有效的訊息內容' });
         }
 
-        // 嘗試抓取首頁內容，萃取標題與段落
-        let siteContext = '';
-        try {
-            const baseUrl = process.env.PUBLIC_SITE_URL || 'https://echochat-frontend.onrender.com/';
-            const { data: html } = await axios.get(baseUrl, { timeout: 10000 });
-            const $ = cheerio.load(html);
-            const title = $('h1.hero-title').text().trim();
-            const subtitle = $('p.hero-subtitle').text().trim();
-            const desc = $('p.hero-description').text().trim();
-            const features = [];
-            $('.feature-grid .feature-card').each((_, el) => {
-                const h3 = $(el).find('h3').text().trim();
-                const p = $(el).find('p').text().trim();
-                if (h3 && p) features.push(`${h3}: ${p}`);
-            });
-            // 也擷取 meta description
-            const metaDesc = $('meta[name="description"]').attr('content')?.trim();
-            siteContext = [
-                metaDesc && `描述: ${metaDesc}`,
-                title && `主標: ${title}`,
-                subtitle && `副標: ${subtitle}`,
-                desc && `說明: ${desc}`,
-                features.length ? `功能: ${features.join('；')}` : ''
-            ]
-                .filter(Boolean)
-                .join('\n');
-        } catch (e) {
-            // 抓取失敗不阻塞
-        }
+        // 萃取多頁內容（首頁/產品/特色/使用場景/定價/關於我們）
+        const baseUrl = process.env.PUBLIC_SITE_URL || 'https://echochat-frontend.onrender.com';
+        const siteContext = await buildMultipageSiteContext(baseUrl);
 
         if (!process.env.OPENAI_API_KEY || !process.env.OPENAI_API_KEY.startsWith('sk-')) {
             const desc = siteContext || 'EchoChat 提供 AI 客服、LINE/網站整合、知識庫導入與自動回覆，協助企業快速上線智慧客服。';
             return res.json({ success: true, reply: `${desc}\n\n目前為公開對話測試模式，若需更進一步協助，請前往聯繫我們頁面。` });
         }
 
-        const systemPrompt = `你是本網站的客服助理。\n任務: 依據下列網站內容，以自然中文回答用戶問題，並適當引用網站功能與價值主張。無資料時清楚說明，並引導至聯繫我們。\n\n【網站內容摘要】\n${siteContext}`;
+        const systemPrompt = `你是本網站的 SaaS 客服助理。\n- 產品定位: 提供讓商家在本平台串接 AI 到自家客服的雲端 SaaS 服務。\n- 回答要求: 以自然中文、條列清楚、可引用平台功能、方案與使用場景；必要時引導至聯繫我們。\n- 若用戶詢問方案，請概述方案差異與適合對象（若有價格資訊可簡述，否則以定位描述）。\n\n【網站內容摘要（多頁彙整）】\n${siteContext}`;
         const messages = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: message }
