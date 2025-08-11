@@ -474,6 +474,39 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// 註冊 API（開啟前請以權限或驗證碼保護）
+app.post('/api/register', async (req, res) => {
+    try {
+        const { username, password, name, email = '' } = req.body || {};
+        if (!username || !password || !name) {
+            return res.status(400).json({ success: false, error: '缺少必要欄位' });
+        }
+        loadDatabase();
+        if (database.staff_accounts.find(u => u.username === username)) {
+            return res.status(409).json({ success: false, error: '用戶名已存在' });
+        }
+        const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const newUser = {
+            id,
+            username,
+            password: hashedPassword,
+            name,
+            role: 'user',
+            email,
+            plan: 'free',
+            created_at: new Date().toISOString()
+        };
+        database.staff_accounts.push(newUser);
+        saveDatabase();
+        const { password: _, ...safe } = newUser;
+        res.json({ success: true, account: safe });
+    } catch (e) {
+        console.error('註冊失敗:', e);
+        res.status(500).json({ success: false, error: '註冊失敗' });
+    }
+});
+
 // 知識庫 API（使用 JSON 檔儲存）
 // 僅回傳屬於自己的知識庫（或未綁定者可選擇是否可見，這裡預設僅本人）
 app.get('/api/knowledge', authenticateJWT, (req, res) => {
