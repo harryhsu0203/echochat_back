@@ -1373,7 +1373,7 @@ app.post('/api/init-database', async (req, res) => {
 // AI 聊天 API 端點 - 使用配置的 AI 模型生成回應
 app.post('/api/chat', authenticateJWT, async (req, res) => {
     try {
-        const { message, conversationId } = req.body;
+        const { message, conversationId, knowledgeOnly } = req.body;
         
         if (!message || typeof message !== 'string') {
             return res.status(400).json({
@@ -1471,9 +1471,20 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             console.warn('知識檢索失敗，將不帶入上下文:', e.message);
         }
 
+        // 若強制僅使用知識庫且沒有知識上下文，直接回覆提示
+        if (knowledgeOnly && !knowledgeContext) {
+            return res.json({
+                success: true,
+                reply: '抱歉，知識庫目前沒有相關資料。請先在知識庫新增或匯入相關內容後再試。',
+                conversationId: conversationId || `conv_${Date.now()}`,
+                model: aiConfig.llm,
+                assistantName: aiConfig.assistant_name
+            });
+        }
+
         // 構建完整的對話訊息
         const messages = [
-            { role: 'system', content: systemPrompt + (knowledgeContext ? `\n\n以下為商家提供的知識庫內容，優先據此回答：\n${knowledgeContext}\n\n若知識庫無相關資訊再自行作答，並標註「一般建議」。` : '') },
+            { role: 'system', content: systemPrompt + (knowledgeContext ? `\n\n以下為商家提供的知識庫內容，${knowledgeOnly ? '僅能根據這些內容回答；若沒有足夠依據，請回覆「知識庫無相關資料」。' : '優先據此回答；若知識庫無相關資訊再自行作答，並標註「一般建議」。'}\n${knowledgeContext}` : (knowledgeOnly ? '\n\n僅能根據知識庫作答，但目前沒有可用內容。' : '')) },
             ...conversationHistory,
             { role: 'user', content: message }
         ];
