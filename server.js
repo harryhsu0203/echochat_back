@@ -1698,8 +1698,8 @@ app.post('/api/public-chat', async (req, res) => {
         // 嘗試抓取首頁內容，萃取標題與段落
         let siteContext = '';
         try {
-            const baseUrl = process.env.PUBLIC_SITE_URL || 'https://echochat-web.onrender.com/';
-            const { data: html } = await axios.get(baseUrl, { timeout: 8000 });
+            const baseUrl = process.env.PUBLIC_SITE_URL || 'https://echochat-frontend.onrender.com/';
+            const { data: html } = await axios.get(baseUrl, { timeout: 10000 });
             const $ = cheerio.load(html);
             const title = $('h1.hero-title').text().trim();
             const subtitle = $('p.hero-subtitle').text().trim();
@@ -1710,7 +1710,15 @@ app.post('/api/public-chat', async (req, res) => {
                 const p = $(el).find('p').text().trim();
                 if (h3 && p) features.push(`${h3}: ${p}`);
             });
-            siteContext = [title && `主標: ${title}`, subtitle && `副標: ${subtitle}`, desc && `說明: ${desc}`, features.length ? `功能: ${features.join('；')}` : '']
+            // 也擷取 meta description
+            const metaDesc = $('meta[name="description"]').attr('content')?.trim();
+            siteContext = [
+                metaDesc && `描述: ${metaDesc}`,
+                title && `主標: ${title}`,
+                subtitle && `副標: ${subtitle}`,
+                desc && `說明: ${desc}`,
+                features.length ? `功能: ${features.join('；')}` : ''
+            ]
                 .filter(Boolean)
                 .join('\n');
         } catch (e) {
@@ -1722,7 +1730,7 @@ app.post('/api/public-chat', async (req, res) => {
             return res.json({ success: true, reply: `${desc}\n\n目前為公開對話測試模式，若需更進一步協助，請前往聯繫我們頁面。` });
         }
 
-        const systemPrompt = `你是本網站的客服助理，請根據網站介紹與功能提供簡潔、友善且實用的回答。\n\n【網站內容】\n${siteContext}`;
+        const systemPrompt = `你是本網站的客服助理。\n任務: 依據下列網站內容，以自然中文回答用戶問題，並適當引用網站功能與價值主張。無資料時清楚說明，並引導至聯繫我們。\n\n【網站內容摘要】\n${siteContext}`;
         const messages = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: message }
