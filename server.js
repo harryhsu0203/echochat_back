@@ -301,6 +301,11 @@ app.post('/api/auth/google', async (req, res) => {
     }
 });
 
+// 取得前端用的 Google Client ID（公開資訊）
+app.get('/api/auth/google/client-id', (req, res) => {
+    return res.json({ success: !!GOOGLE_CLIENT_ID, client_id: GOOGLE_CLIENT_ID || null });
+});
+
 // 請求速率限制
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
