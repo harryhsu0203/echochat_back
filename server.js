@@ -1167,7 +1167,7 @@ app.post('/api/profile', authenticateJWT, (req, res) => {
     }
 });
 
-// 使用者自助升級至尊榮版（模擬付款流程）
+// 使用者自助升級或儲值 Token（綠界收銀台）
 app.post('/api/upgrade', authenticateJWT, (req, res) => {
     try {
         const user = findStaffById(req.staff.id);
@@ -1178,15 +1178,16 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
         const date = new Date();
         const pad2 = (n) => n.toString().padStart(2, '0');
         const tradeDate = `${date.getFullYear()}/${pad2(date.getMonth()+1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
-        const totalAmount = 2990; // NTD，示例：尊榮版年費/或月費請自行調整
+        const { type = 'plan', amount = 2990, tokens = 0 } = req.body || {};
+        const totalAmount = Math.max(parseInt(amount, 10) || 0, 0);
         const orderParams = {
             MerchantID: ECPAY_MERCHANT_ID,
             MerchantTradeNo: tradeNo,
             MerchantTradeDate: tradeDate,
             PaymentType: 'aio',
             TotalAmount: totalAmount,
-            TradeDesc: 'EchoChat Premium 升級',
-            ItemName: 'EchoChat 尊榮版 x1',
+            TradeDesc: type === 'topup' ? `EchoChat Token 儲值 ${tokens}` : 'EchoChat Premium 升級',
+            ItemName: type === 'topup' ? `Token 儲值 (${tokens}) x1` : 'EchoChat 尊榮版 x1',
             ReturnURL: ECPAY_RETURN_URL,
             OrderResultURL: ECPAY_ORDER_RESULT_URL,
             ClientBackURL: ECPAY_CLIENT_BACK_URL,
@@ -1216,7 +1217,9 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
             tradeNo,
             userId: user.id,
             amount: totalAmount,
-            plan: 'premium',
+            plan: type === 'plan' ? 'premium' : null,
+            type,
+            tokens: type === 'topup' ? parseInt(tokens, 10) || 0 : 0,
             status: 'pending',
             created_at: new Date().toISOString()
         });
@@ -1275,14 +1278,18 @@ app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (
         if (data.RtnCode === '1' || data.RtnCode === 1) {
             payment.status = 'paid';
             payment.paid_at = new Date().toISOString();
-            // 升級用戶方案
+            // 升級或儲值
             const user = findStaffById(payment.userId);
             if (user) {
-                user.plan = payment.plan;
-                // 設定到期（尊榮版預設 30 天）
-                const expires = new Date();
-                expires.setDate(expires.getDate() + 30);
-                user.plan_expires_at = expires.toISOString();
+                if (payment.type === 'plan' && payment.plan) {
+                    user.plan = payment.plan;
+                    const expires = new Date();
+                    expires.setDate(expires.getDate() + 30);
+                    user.plan_expires_at = expires.toISOString();
+                } else if (payment.type === 'topup' && payment.tokens > 0) {
+                    ensureUserTokenFields(user);
+                    user.token_bonus_balance = (user.token_bonus_balance || 0) + payment.tokens;
+                }
             }
         saveDatabase();
         } else {
