@@ -274,6 +274,33 @@ app.use(cors({
     maxAge: 600
 }));
 
+// Google 登入交換端點：前端傳 id_token，後端驗證並發 JWT
+app.post('/api/auth/google', async (req, res) => {
+    try {
+        const { id_token } = req.body || {};
+        if (!id_token) return res.status(400).json({ success:false, error:'缺少 id_token' });
+        const ticket = await googleClient.verifyIdToken({ idToken: id_token, audience: GOOGLE_CLIENT_ID });
+        const payload = ticket.getPayload();
+        const email = payload.email;
+        const name = payload.name || payload.given_name || 'Google 使用者';
+
+        loadDatabase();
+        let user = (database.staff_accounts || []).find(u => u.email === email);
+        if (!user) {
+            // 首次登入自動註冊為一般用戶
+            const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
+            user = { id, username: email, password: await bcrypt.hash(uuidv4(), 10), name, role:'user', email, plan:'free', created_at: new Date().toISOString() };
+            database.staff_accounts.push(user);
+            saveDatabase();
+        }
+        const token = jwt.sign({ id: user.id, username: user.username, name: user.name, role: user.role }, JWT_SECRET, { expiresIn:'7d' });
+        return res.json({ success:true, token, user: { id:user.id, name:user.name, email:user.email, role:user.role, plan:user.plan } });
+    } catch (e) {
+        console.error('Google 登入失敗', e.message);
+        return res.status(401).json({ success:false, error:'Google 登入驗證失敗' });
+    }
+});
+
 // 請求速率限制
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
