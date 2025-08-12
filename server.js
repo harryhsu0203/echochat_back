@@ -1333,6 +1333,9 @@ app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
             plan_expires_at: staff.plan_expires_at || null,
             subscription_status: staff.subscription_status || 'none',
             next_billing_at: staff.next_billing_at || null,
+            enterprise_token_monthly: staff.enterprise_token_monthly || 0,
+            token_used_in_cycle: staff.token_used_in_cycle || 0,
+            token_bonus_balance: staff.token_bonus_balance || 0,
             created_at: staff.created_at
         }));
         res.json({ success: true, accounts });
@@ -1368,7 +1371,7 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         const id = parseInt(req.params.id);
         const user = database.staff_accounts.find(u => u.id === id);
         if (!user) return res.status(404).json({ success: false, error: '帳號不存在' });
-        const { name, role, password, email, plan, plan_expires_at, subscription_status, next_billing_at, enterprise_token_monthly } = req.body;
+        const { name, role, password, email, plan, plan_expires_at, subscription_status, next_billing_at, enterprise_token_monthly, token_used_in_cycle, token_bonus_balance } = req.body;
         if (name !== undefined) user.name = name;
         if (role !== undefined) user.role = role;
         if (email !== undefined) user.email = email;
@@ -1377,6 +1380,8 @@ app.put('/api/accounts/:id', authenticateJWT, checkRole(['admin']), async (req, 
         if (subscription_status !== undefined) user.subscription_status = subscription_status;
         if (next_billing_at !== undefined) user.next_billing_at = next_billing_at;
         if (enterprise_token_monthly !== undefined) user.enterprise_token_monthly = parseInt(enterprise_token_monthly, 10) || 0;
+        if (token_used_in_cycle !== undefined) user.token_used_in_cycle = parseInt(token_used_in_cycle, 10) || 0;
+        if (token_bonus_balance !== undefined) user.token_bonus_balance = parseInt(token_bonus_balance, 10) || 0;
         if (password) {
             user.password = await bcrypt.hash(password, 10);
         }
