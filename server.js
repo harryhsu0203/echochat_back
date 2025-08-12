@@ -349,6 +349,20 @@ function decryptSensitive(encText) {
     }
 }
 
+// 取得使用者的 AI 助理配置（每帳號）
+function getUserAIConfig(userId) {
+    loadDatabase();
+    const fallback = {
+        assistant_name: 'AI 助理',
+        llm: 'gpt-3.5-turbo',
+        use_case: 'customer-service',
+        description: '我是您的智能客服助理，很高興為您服務！'
+    };
+    if (!Array.isArray(database.ai_assistant_configs)) return fallback;
+    const found = database.ai_assistant_configs.find(c => c.user_id === userId);
+    return (found && found.config) ? found.config : fallback;
+}
+
 // 依使用者與平台取得頻道與解密後的憑證
 function findUserChannel(userId, platform) {
     loadDatabase();
@@ -357,6 +371,76 @@ function findUserChannel(userId, platform) {
     const apiKey = decryptSensitive(ch.apiKeyEnc) || ch.apiKeyEnc || '';
     const secret = decryptSensitive(ch.channelSecretEnc) || ch.channelSecretEnc || '';
     return { ...ch, apiKey, secret };
+}
+
+// 取得 LINE 憑證
+function getLineCredentials(userId) {
+    loadDatabase();
+    const rec = (database.line_api_settings || []).find(r => r.user_id === userId);
+    if (!rec) return null;
+    const token = decryptSensitive(rec.channel_access_token) || rec.channel_access_token || '';
+    const secret = decryptSensitive(rec.channel_secret) || rec.channel_secret || '';
+    return { channelAccessToken: token, channelSecret: secret };
+}
+
+// 以使用者知識庫產生 AI 回覆並扣點
+async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
+    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY 未設置');
+    loadDatabase();
+    const aiConfig = getUserAIConfig(userId);
+    const user = getUserById(userId);
+    ensureUserTokenFields(user);
+    maybeResetCycle(user);
+
+    const normalized = (text) => (text || '').toLowerCase();
+    const terms = normalized(message).replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 20);
+    let knowledgeContext = '';
+    const userKnowledge = (database.knowledge || []).filter(k => k.user_id === userId);
+    const scored = userKnowledge.map(k => {
+        const text = `${k.question} ${k.answer}`.toLowerCase();
+        const score = terms.reduce((acc, t) => acc + (text.includes(t) ? 1 : 0), 0);
+        return { item: k, score };
+    }).filter(s => s.score > 0);
+    scored.sort((a, b) => b.score - a.score);
+    let top = scored.slice(0, 5).map(s => s.item);
+    if (top.length === 0 && userKnowledge.length > 0) {
+        const sortedByTime = [...userKnowledge].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        top = sortedByTime.slice(0, 3);
+    }
+    if (top.length) {
+        knowledgeContext = top.map((k, idx) => `【來源${idx + 1}】Q: ${k.question}\nA: ${k.answer}`).join('\n\n');
+        if (knowledgeContext.length > 4000) knowledgeContext = knowledgeContext.slice(0, 4000);
+    }
+    if (knowledgeOnly && !knowledgeContext) return { reply: '抱歉，知識庫目前沒有相關資料。' };
+
+    const systemPrompt = `你是 ${aiConfig.assistant_name}，${aiConfig.description}。你的使用場景是：${aiConfig.use_case}。請根據用戶的問題提供專業、友善且有用的回應。`;
+    const messages = [
+        { role: 'system', content: systemPrompt + (knowledgeContext ? `\n\n以下為商家提供的知識庫內容，${knowledgeOnly ? '僅能根據這些內容回答；若沒有足夠依據，請回覆「知識庫無相關資料」。' : '優先據此回答；若知識庫無相關資訊再自行作答，並標註「一般建議」。'}\n${knowledgeContext}` : (knowledgeOnly ? '\n\n僅能根據知識庫作答，但目前沒有可用內容。' : '')) },
+        { role: 'user', content: message }
+    ];
+
+    const planAllowance = getPlanAllowance(user?.plan || 'free', user);
+    const estimatedTokens = estimateChatTokens(message, knowledgeContext, 600);
+    const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
+    if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
+
+    const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: aiConfig.llm || 'gpt-3.5-turbo',
+        messages,
+        max_tokens: 800,
+        temperature: 0.6
+    }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' } });
+    const aiReply = openaiResponse.data.choices[0].message.content.trim();
+
+    let remainingNeed = estimatedTokens;
+    const cycleRemain = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0);
+    const useFromCycle = Math.min(cycleRemain, remainingNeed);
+    user.token_used_in_cycle = (user.token_used_in_cycle || 0) + useFromCycle;
+    remainingNeed -= useFromCycle;
+    if (remainingNeed > 0) user.token_bonus_balance = Math.max((user.token_bonus_balance || 0) - remainingNeed, 0);
+    saveDatabase();
+
+    return { reply: aiReply, model: aiConfig.llm, assistantName: aiConfig.assistant_name };
 }
 
 // JWT 身份驗證中間件
@@ -3113,6 +3197,13 @@ app.post('/api/webhook/slack/:userId', async (req, res) => {
             conv.messages.push({ role: 'user', content: event.text || '', timestamp: new Date().toISOString() });
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
+
+            // 生成 AI 回覆（僅存對話；回推 Slack 需安裝 bot 並呼叫 chat.postMessage，可後續擴充）
+            try {
+                const { reply } = await generateAIReplyForUser(userId, event.text || '', true);
+                conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                saveDatabase();
+            } catch {}
         }
         res.json({ ok: true });
     } catch (e) {
@@ -3138,6 +3229,12 @@ app.post('/api/webhook/telegram/:userId', async (req, res) => {
             conv.messages.push({ role: 'user', content: msg.text, timestamp: new Date().toISOString() });
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
+
+            try {
+                const { reply } = await generateAIReplyForUser(userId, msg.text, true);
+                conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                saveDatabase();
+            } catch {}
         }
         res.json({ ok: true });
     } catch (e) {
@@ -3163,6 +3260,12 @@ app.post('/api/webhook/discord/:userId', async (req, res) => {
             conv.messages.push({ role: 'user', content, timestamp: new Date().toISOString() });
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
+
+            try {
+                const { reply } = await generateAIReplyForUser(userId, content, true);
+                conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                saveDatabase();
+            } catch {}
         }
         res.json({ ok: true });
     } catch (e) {
@@ -3196,6 +3299,12 @@ app.post('/api/webhook/messenger/:userId', async (req, res) => {
                     conv.messages.push({ role: 'user', content: ev.message.text, timestamp: new Date().toISOString() });
                     conv.updatedAt = new Date().toISOString();
                     saveDatabase();
+
+                    try {
+                        const { reply } = await generateAIReplyForUser(userId, ev.message.text, true);
+                        conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                        saveDatabase();
+                    } catch {}
                 }
             }
         }
@@ -3233,6 +3342,12 @@ app.post('/api/webhook/whatsapp/:userId', async (req, res) => {
                         conv.messages.push({ role: 'user', content: msg.text.body, timestamp: new Date().toISOString() });
                         conv.updatedAt = new Date().toISOString();
                         saveDatabase();
+
+                        try {
+                            const { reply } = await generateAIReplyForUser(userId, msg.text.body, true);
+                            conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                            saveDatabase();
+                        } catch {}
                     }
                 }
             }
@@ -3266,6 +3381,21 @@ async function handleLineMessage(event, userId) {
         conv.messages.push({ role: 'user', content: message.text || '', timestamp: new Date().toISOString() });
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
+
+        // 生成 AI 回覆並嘗試回推
+        try {
+            const { reply } = await generateAIReplyForUser(userId, message.text || '', true);
+            // 回推 LINE 訊息（若有保存憑證）
+            const creds = getLineCredentials(userId);
+            if (creds && creds.channelAccessToken) {
+                const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+                await client.pushMessage(sourceUserId, { type: 'text', text: reply });
+            }
+            conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+            saveDatabase();
+        } catch (e) {
+            console.warn('生成/回推 AI 回覆失敗:', e.message);
+        }
         
     } catch (error) {
         console.error('處理 LINE 訊息錯誤:', error);
