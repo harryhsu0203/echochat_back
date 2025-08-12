@@ -1877,6 +1877,8 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         if (!conversation) {
             conversation = {
                 id: conversationId || `conv_${Date.now()}`,
+                userId: req.staff?.id || null,
+                platform: 'dashboard',
                 messages: [],
                 createdAt: new Date().toISOString(),
                 updatedAt: new Date().toISOString()
@@ -3089,6 +3091,158 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
     }
 });
 
+// Slack Webhook（事件API）- 每位使用者專屬 URL
+app.post('/api/webhook/slack/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const body = req.body || {};
+        // Slack URL 驗證
+        if (body.type === 'url_verification') {
+            return res.json({ challenge: body.challenge });
+        }
+        const event = body.event || {};
+        if (event.type === 'message' && !event.bot_id) {
+            loadDatabase();
+            if (!database.chat_history) database.chat_history = [];
+            const convId = `slack_${userId}_${event.channel}`;
+            let conv = database.chat_history.find(c => c.id === convId);
+            if (!conv) {
+                conv = { id: convId, userId, platform: 'slack', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                database.chat_history.push(conv);
+            }
+            conv.messages.push({ role: 'user', content: event.text || '', timestamp: new Date().toISOString() });
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false });
+    }
+});
+
+// Telegram Webhook
+app.post('/api/webhook/telegram/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const body = req.body || {};
+        const msg = body.message || {};
+        if (msg.text) {
+            loadDatabase();
+            if (!database.chat_history) database.chat_history = [];
+            const convId = `telegram_${userId}_${msg.chat?.id || 'unknown'}`;
+            let conv = database.chat_history.find(c => c.id === convId);
+            if (!conv) {
+                conv = { id: convId, userId, platform: 'telegram', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                database.chat_history.push(conv);
+            }
+            conv.messages.push({ role: 'user', content: msg.text, timestamp: new Date().toISOString() });
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false });
+    }
+});
+
+// Discord Webhook（互動或機器人事件需另設 Gateway，本處僅提供簡易 Webhook 收信）
+app.post('/api/webhook/discord/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const body = req.body || {};
+        const content = body.content || body.message || '';
+        if (content) {
+            loadDatabase();
+            if (!database.chat_history) database.chat_history = [];
+            const convId = `discord_${userId}_webhook`;
+            let conv = database.chat_history.find(c => c.id === convId);
+            if (!conv) {
+                conv = { id: convId, userId, platform: 'discord', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                database.chat_history.push(conv);
+            }
+            conv.messages.push({ role: 'user', content, timestamp: new Date().toISOString() });
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false });
+    }
+});
+
+// Messenger Webhook（需同時支援驗證）
+app.get('/api/webhook/messenger/:userId', (req, res) => {
+    const challenge = req.query['hub.challenge'];
+    if (challenge) return res.status(200).send(challenge);
+    res.sendStatus(200);
+});
+app.post('/api/webhook/messenger/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const body = req.body || {};
+        const entries = body.entry || [];
+        for (const entry of entries) {
+            for (const ev of (entry.messaging || [])) {
+                if (ev.message && ev.message.text) {
+                    loadDatabase();
+                    if (!database.chat_history) database.chat_history = [];
+                    const sender = ev.sender?.id || 'unknown';
+                    const convId = `messenger_${userId}_${sender}`;
+                    let conv = database.chat_history.find(c => c.id === convId);
+                    if (!conv) {
+                        conv = { id: convId, userId, platform: 'messenger', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                        database.chat_history.push(conv);
+                    }
+                    conv.messages.push({ role: 'user', content: ev.message.text, timestamp: new Date().toISOString() });
+                    conv.updatedAt = new Date().toISOString();
+                    saveDatabase();
+                }
+            }
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false });
+    }
+});
+
+// WhatsApp Webhook（Meta Cloud API）
+app.get('/api/webhook/whatsapp/:userId', (req, res) => {
+    const challenge = req.query['hub.challenge'];
+    if (challenge) return res.status(200).send(challenge);
+    res.sendStatus(200);
+});
+app.post('/api/webhook/whatsapp/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const body = req.body || {};
+        const entries = body.entry || [];
+        for (const entry of entries) {
+            for (const change of (entry.changes || [])) {
+                const messages = change.value?.messages || [];
+                for (const msg of messages) {
+                    if (msg.type === 'text' && msg.text?.body) {
+                        loadDatabase();
+                        if (!database.chat_history) database.chat_history = [];
+                        const from = msg.from || 'unknown';
+                        const convId = `whatsapp_${userId}_${from}`;
+                        let conv = database.chat_history.find(c => c.id === convId);
+                        if (!conv) {
+                            conv = { id: convId, userId, platform: 'whatsapp', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                            database.chat_history.push(conv);
+                        }
+                        conv.messages.push({ role: 'user', content: msg.text.body, timestamp: new Date().toISOString() });
+                        conv.updatedAt = new Date().toISOString();
+                        saveDatabase();
+                    }
+                }
+            }
+        }
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ ok: false });
+    }
+});
+
 // 處理 LINE 訊息事件
 async function handleLineMessage(event, userId) {
     try {
@@ -3100,22 +3254,17 @@ async function handleLineMessage(event, userId) {
         // 這裡可以添加自動回應邏輯
         // 例如：根據 AI 設定生成回應，保存訊息到資料庫等
         
-        // 暫時只記錄訊息
+        // 寫入使用者專屬對話記錄（依 userId 隔離）
         loadDatabase();
-        if (!database.line_messages) {
-            database.line_messages = [];
+        if (!database.chat_history) database.chat_history = [];
+        const convId = `line_${userId}_${sourceUserId}`;
+        let conv = database.chat_history.find(c => c.id === convId);
+        if (!conv) {
+            conv = { id: convId, userId, platform: 'line', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+            database.chat_history.push(conv);
         }
-        
-        database.line_messages.push({
-            id: uuidv4(),
-            userId: userId,
-            sourceUserId: sourceUserId,
-            messageType: message.type,
-            messageText: message.text || '',
-            timestamp: new Date().toISOString(),
-            processed: false
-        });
-        
+        conv.messages.push({ role: 'user', content: message.text || '', timestamp: new Date().toISOString() });
+        conv.updatedAt = new Date().toISOString();
         saveDatabase();
         
     } catch (error) {
