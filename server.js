@@ -349,6 +349,16 @@ function decryptSensitive(encText) {
     }
 }
 
+// 依使用者與平台取得頻道與解密後的憑證
+function findUserChannel(userId, platform) {
+    loadDatabase();
+    const ch = (database.channels || []).find(c => c.userId === userId && String(c.platform).toLowerCase() === String(platform).toLowerCase());
+    if (!ch) return null;
+    const apiKey = decryptSensitive(ch.apiKeyEnc) || ch.apiKeyEnc || '';
+    const secret = decryptSensitive(ch.channelSecretEnc) || ch.channelSecretEnc || '';
+    return { ...ch, apiKey, secret };
+}
+
 // JWT 身份驗證中間件
 const authenticateJWT = (req, res, next) => {
     try {
@@ -2285,7 +2295,7 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
 });
 
 // 測試頻道連接
-app.post('/api/channels/test', authenticateJWT, (req, res) => {
+app.post('/api/channels/test', authenticateJWT, async (req, res) => {
     try {
         const { platform, apiKey, channelSecret } = req.body;
         
@@ -2296,8 +2306,9 @@ app.post('/api/channels/test', authenticateJWT, (req, res) => {
             });
         }
         
+        const pf = String(platform).toLowerCase();
         // 根據平台進行不同的測試
-        if (platform === 'LINE') {
+        if (pf === 'line') {
             // LINE 平台測試
             try {
                 const lineClient = new Client({
@@ -2320,12 +2331,26 @@ app.post('/api/channels/test', authenticateJWT, (req, res) => {
                     error: 'LINE 頻道連接測試失敗'
                 });
             }
+        } else if (pf === 'slack') {
+            // 嘗試使用 slack auth 檢查（僅檢查字串存在）
+            if (!/^xoxb-/.test(apiKey)) return res.json({ success: false, error: 'Slack Bot Token 格式錯誤' });
+            return res.json({ success: true, message: 'Slack Token 格式看起來有效' });
+        } else if (pf === 'telegram') {
+            if (!/^[0-9]+:[A-Za-z0-9_-]+$/.test(apiKey)) return res.json({ success: false, error: 'Telegram Bot Token 格式錯誤' });
+            return res.json({ success: true, message: 'Telegram Token 格式看起來有效' });
+        } else if (pf === 'discord') {
+            if (!apiKey || apiKey.length < 20) return res.json({ success: false, error: 'Discord Bot Token 看起來無效' });
+            return res.json({ success: true, message: 'Discord Token 格式看起來有效' });
+        } else if (pf === 'messenger') {
+            if (!apiKey || !channelSecret) return res.json({ success: false, error: '需提供 Page Access Token 與 App Secret' });
+            return res.json({ success: true, message: 'Messenger 憑證已提供' });
+        } else if (pf === 'whatsapp') {
+            if (!apiKey) return res.json({ success: false, error: '需提供 WhatsApp Cloud API Token' });
+            return res.json({ success: true, message: 'WhatsApp Token 已提供' });
+        } else if (pf === 'webhook') {
+            return res.json({ success: true, message: 'Webhook 將使用您提供的 URL 接收事件' });
         } else {
-            // 其他平台的測試邏輯
-            res.json({
-                success: true,
-                message: `${platform} 頻道連接測試成功`
-            });
+            return res.json({ success: true, message: `${platform} 測試完成` });
         }
         
     } catch (error) {
