@@ -1137,15 +1137,34 @@ app.post('/api/knowledge/import/file', authenticateJWT, upload.single('file'), a
 // 資料儲存於 database.appointments（每筆包含 id, datetime, name, contact, note, status, created_at）
 
 // 建立週期性預設可預約規則（Mon-Fri 10:00-17:00 整點）
+function getBusinessHours() {
+    loadDatabase();
+    if (!database.business_hours) {
+        database.business_hours = {
+            mon: { open: true, start: 10, end: 17 },
+            tue: { open: true, start: 10, end: 17 },
+            wed: { open: true, start: 10, end: 17 },
+            thu: { open: true, start: 10, end: 17 },
+            fri: { open: true, start: 10, end: 17 },
+            sat: { open: false, start: 10, end: 17 },
+            sun: { open: false, start: 10, end: 17 }
+        };
+        saveDatabase();
+    }
+    return database.business_hours;
+}
+
 function generateDefaultSlots(days = 14) {
     const slots = [];
     const now = new Date();
+    const bh = getBusinessHours();
     for (let i = 0; i < days; i++) {
         const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
-        const day = d.getDay();
-        // 1-5: Mon-Fri
-        if (day >= 1 && day <= 5) {
-            for (let h = 10; h <= 17; h++) {
+        const day = d.getDay(); // 0 Sun ... 6 Sat
+        const map = ['sun','mon','tue','wed','thu','fri','sat'];
+        const cfg = bh[map[day]] || { open: false };
+        if (cfg.open) {
+            for (let h = cfg.start; h <= cfg.end; h++) {
                 const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, 0, 0, 0);
                 if (dt.getTime() > now.getTime()) {
                     slots.push(dt.toISOString());
@@ -1206,6 +1225,41 @@ app.post('/api/appointments/book', (req, res) => {
     } catch (e) {
         console.error('建立預約失敗:', e.message);
         return res.status(500).json({ success: false, error: '建立預約失敗' });
+    }
+});
+
+// 營業時間：取得/更新（需登入）
+app.get('/api/appointments/business-hours', authenticateJWT, (req, res) => {
+    try {
+        const bh = getBusinessHours();
+        return res.json({ success: true, hours: bh });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '無法取得營業時間' });
+    }
+});
+
+app.post('/api/appointments/business-hours', authenticateJWT, (req, res) => {
+    try {
+        const { hours } = req.body || {};
+        if (!hours || typeof hours !== 'object') {
+            return res.status(400).json({ success: false, error: '格式不正確' });
+        }
+        const keys = ['mon','tue','wed','thu','fri','sat','sun'];
+        const normalized = {};
+        for (const k of keys) {
+            const v = hours[k] || {};
+            normalized[k] = {
+                open: Boolean(v.open),
+                start: Number.isFinite(v.start) ? Number(v.start) : 10,
+                end: Number.isFinite(v.end) ? Number(v.end) : 17
+            };
+        }
+        loadDatabase();
+        database.business_hours = normalized;
+        saveDatabase();
+        return res.json({ success: true, hours: normalized });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '更新營業時間失敗' });
     }
 });
 
