@@ -1730,10 +1730,12 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
                             llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
+            industry: 'general',
+            features: [],
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };
-        const config = found ? found.config : defaultConfig;
+        const config = found ? { industry: 'general', features: [], ...found.config } : defaultConfig;
 
         const user = getUserById(userId);
         ensureUserTokenFields(user);
@@ -1759,7 +1761,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
 // 更新 AI 助理配置
 app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
     try {
-        const { assistant_name, llm, use_case, description } = req.body;
+        const { assistant_name, llm, use_case, description, industry, features } = req.body;
         
         // 驗證必要欄位
         if (!assistant_name || !llm || !use_case) {
@@ -1774,6 +1776,8 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
             llm: llm.trim(),
             use_case: use_case.trim(),
             description: description ? description.trim() : '',
+            industry: typeof industry === 'string' ? industry.trim() : 'general',
+            features: Array.isArray(features) ? features.filter(f => typeof f === 'string') : [],
             updated_at: new Date().toISOString()
         };
         
@@ -1827,6 +1831,8 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
                             llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
+            industry: 'general',
+            features: [],
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };
