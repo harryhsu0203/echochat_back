@@ -1436,6 +1436,41 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
     }
 });
 
+// 取消訂閱（當期結束後生效）
+app.post('/api/subscription/cancel', authenticateJWT, (req, res) => {
+    try {
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        loadDatabase();
+        user.subscription_status = 'cancel_at_period_end';
+        // 若無到期日，預設 30 天後終止
+        if (!user.plan_expires_at) {
+            const expires = new Date();
+            expires.setDate(expires.getDate() + 30);
+            user.plan_expires_at = expires.toISOString();
+        }
+        saveDatabase();
+        return res.json({ success: true, message: '已設定於週期結束後取消訂閱', plan_expires_at: user.plan_expires_at });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '取消訂閱失敗' });
+    }
+});
+
+// 變更付款方式（示意：更新付款紀錄的偏好）
+app.post('/api/subscription/payment-method', authenticateJWT, (req, res) => {
+    try {
+        const { method = 'Credit' } = req.body || {};
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        loadDatabase();
+        user.payment_method = method;
+        saveDatabase();
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '更新付款方式失敗' });
+    }
+});
+
 // 綠界伺服器端通知（付款結果）
 app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (req, res) => {
     try {
