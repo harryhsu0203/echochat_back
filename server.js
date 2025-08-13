@@ -1471,6 +1471,36 @@ app.post('/api/subscription/payment-method', authenticateJWT, (req, res) => {
     }
 });
 
+// 取消訂閱挽回：提供一次性 10% 折扣（僅下期一次）
+app.post('/api/subscription/retention-offer', authenticateJWT, (req, res) => {
+    try {
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        loadDatabase();
+        user.retention_offer = { type: 'one_month_discount', value: 0.1, granted_at: new Date().toISOString() };
+        saveDatabase();
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '設定挽回優惠失敗' });
+    }
+});
+
+// 收集取消原因
+app.post('/api/subscription/cancel-feedback', authenticateJWT, (req, res) => {
+    try {
+        const { reason = '' } = req.body || {};
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        loadDatabase();
+        if (!Array.isArray(database.cancellation_feedback)) database.cancellation_feedback = [];
+        database.cancellation_feedback.push({ userId: user.id, reason: String(reason), created_at: new Date().toISOString() });
+        saveDatabase();
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '回饋提交失敗' });
+    }
+});
+
 // 綠界伺服器端通知（付款結果）
 app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (req, res) => {
     try {
