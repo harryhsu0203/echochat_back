@@ -736,25 +736,25 @@ app.post('/api/login', async (req, res) => {
         
         if (!username || !password) {
             return res.status(400).json({
-            success: false,
+                success: false,
                 error: '請提供用戶名和密碼'
-        });
-    }
-    
+            });
+        }
+
         try {
             const staff = findStaffByUsername(username);
-    
+            
             if (!staff) {
-        return res.status(401).json({
-            success: false,
+                return res.status(401).json({
+                    success: false,
                     error: '用戶名或密碼錯誤'
                 });
             }
 
             const isValidPassword = await bcrypt.compare(password, staff.password);
             if (!isValidPassword) {
-        return res.status(401).json({
-            success: false,
+                return res.status(401).json({
+                    success: false,
                     error: '用戶名或密碼錯誤'
                 });
             }
@@ -1132,6 +1132,116 @@ app.post('/api/knowledge/import/file', authenticateJWT, upload.single('file'), a
     }
 });
 
+// 預約系統：提供公開可讀取的可預約時段與預約建立
+// 可用於在前台提供客戶檢視與下單（不強制登入）
+// 資料儲存於 database.appointments（每筆包含 id, datetime, name, contact, note, status, created_at）
+
+// 建立週期性預設可預約規則（Mon-Fri 10:00-17:00 整點）
+function generateDefaultSlots(days = 14) {
+    const slots = [];
+    const now = new Date();
+    for (let i = 0; i < days; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+        const day = d.getDay();
+        // 1-5: Mon-Fri
+        if (day >= 1 && day <= 5) {
+            for (let h = 10; h <= 17; h++) {
+                const dt = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, 0, 0, 0);
+                if (dt.getTime() > now.getTime()) {
+                    slots.push(dt.toISOString());
+                }
+            }
+        }
+    }
+    return slots;
+}
+
+// 取得可預約時段（公開）
+app.get('/api/appointments/slots', (req, res) => {
+    try {
+        loadDatabase();
+        const all = Array.isArray(database.appointments) ? database.appointments : [];
+        const booked = new Set(all.filter(x => x.status !== 'cancelled').map(x => new Date(x.datetime).toISOString()));
+        const slots = generateDefaultSlots(14).filter(iso => !booked.has(iso));
+        return res.json({ success: true, slots });
+    } catch (e) {
+        console.error('取得可預約時段失敗:', e.message);
+        return res.status(500).json({ success: false, error: '無法取得可預約時段' });
+    }
+});
+
+// 建立預約（公開）
+app.post('/api/appointments/book', (req, res) => {
+    try {
+        const { name, contact, datetime, note } = req.body || {};
+        if (!name || !contact || !datetime) {
+            return res.status(400).json({ success: false, error: '缺少必要欄位' });
+        }
+        const dt = new Date(datetime);
+        if (isNaN(dt.getTime())) {
+            return res.status(400).json({ success: false, error: '時間格式不正確' });
+        }
+
+        loadDatabase();
+        if (!Array.isArray(database.appointments)) database.appointments = [];
+        const normalized = dt.toISOString();
+        const exists = database.appointments.find(x => new Date(x.datetime).toISOString() === normalized && x.status !== 'cancelled');
+        if (exists) {
+            return res.status(409).json({ success: false, error: '此時段已被預約' });
+        }
+
+        const nextId = database.appointments.length ? Math.max(...database.appointments.map(x => x.id || 0)) + 1 : 1;
+        const item = {
+            id: nextId,
+            datetime: normalized,
+            name: String(name).trim(),
+            contact: String(contact).trim(),
+            note: note ? String(note).trim() : '',
+            status: 'pending',
+            created_at: new Date().toISOString()
+        };
+        database.appointments.push(item);
+        saveDatabase();
+        return res.json({ success: true, appointment: item });
+    } catch (e) {
+        console.error('建立預約失敗:', e.message);
+        return res.status(500).json({ success: false, error: '建立預約失敗' });
+    }
+});
+
+// 商家端：取得所有預約（需登入）
+app.get('/api/appointments', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        const all = Array.isArray(database.appointments) ? database.appointments : [];
+        // 簡化：目前無多商家切分，全部返回
+        return res.json({ success: true, items: all.sort((a,b)=> new Date(a.datetime)-new Date(b.datetime)) });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '無法取得預約清單' });
+    }
+});
+
+// 商家端：更新預約狀態（確認/取消）（需登入）
+app.post('/api/appointments/:id/status', authenticateJWT, (req, res) => {
+    try {
+        const id = parseInt(req.params.id, 10);
+        const { status } = req.body || {};
+        if (!['pending', 'confirmed', 'cancelled', 'completed'].includes(status)) {
+            return res.status(400).json({ success: false, error: '狀態不正確' });
+        }
+        loadDatabase();
+        if (!Array.isArray(database.appointments)) database.appointments = [];
+        const idx = database.appointments.findIndex(x => x.id === id);
+        if (idx === -1) return res.status(404).json({ success: false, error: '預約不存在' });
+        database.appointments[idx].status = status;
+        database.appointments[idx].updated_at = new Date().toISOString();
+        saveDatabase();
+        return res.json({ success: true, item: database.appointments[idx] });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '更新狀態失敗' });
+    }
+});
+
 // 取得目前使用者資訊
 app.get('/api/me', authenticateJWT, (req, res) => {
     try {
@@ -1259,7 +1369,7 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
         
         // 回傳可自動送出的表單資料給前端
         return res.json({
-        success: true,
+                success: true,
             action: ECPAY_ACTION,
             params: {
                 ...orderParams,
@@ -1314,10 +1424,10 @@ app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (
             const user = findStaffById(payment.userId);
             if (user) {
                 if (payment.type === 'plan' && payment.plan) {
-                    user.plan = payment.plan;
-                    const expires = new Date();
-                    expires.setDate(expires.getDate() + 30);
-                    user.plan_expires_at = expires.toISOString();
+                user.plan = payment.plan;
+                const expires = new Date();
+                expires.setDate(expires.getDate() + 30);
+                user.plan_expires_at = expires.toISOString();
                 } else if (payment.type === 'topup' && payment.tokens > 0) {
                     ensureUserTokenFields(user);
                     user.token_bonus_balance = (user.token_bonus_balance || 0) + payment.tokens;
@@ -1504,7 +1614,7 @@ app.post('/api/forgot-password', async (req, res) => {
             
             console.log('✅ 密碼重設驗證碼已發送給:', email);
             
-        res.json({
+            res.json({
                 success: true,
                 message: '驗證碼已發送到您的電子郵件'
             });
@@ -1617,7 +1727,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         const found = database.ai_assistant_configs.find(c => c.user_id === userId);
         const defaultConfig = {
             assistant_name: 'AI 助理',
-            llm: 'gpt-3.5-turbo',
+                            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
             created_at: new Date().toISOString(),
@@ -1628,7 +1738,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         const user = getUserById(userId);
         ensureUserTokenFields(user);
         maybeResetCycle(user);
-
+        
         res.json({
             success: true,
             config,
@@ -1682,7 +1792,7 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
             database.ai_assistant_configs[idx].config = config;
         }
         saveDatabase();
-
+        
         console.log('✅ AI 助理配置已更新(使用者):', req.staff.username);
         // 附帶目前 token 狀態
         const user = getUserById(req.staff.id);
@@ -1714,13 +1824,13 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     try {
         const defaultConfig = {
             assistant_name: 'AI 助理',
-            llm: 'gpt-3.5-turbo',
+                            llm: 'gpt-3.5-turbo',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
         };
-
+        
         loadDatabase();
         if (!Array.isArray(database.ai_assistant_configs)) {
             database.ai_assistant_configs = [];
@@ -1733,7 +1843,7 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
             database.ai_assistant_configs[idx].config = defaultConfig;
         }
         saveDatabase();
-
+        
         console.log('✅ AI 助理配置已重置為預設值(使用者):', req.staff.username);
         res.json({ success: true, message: 'AI 助理配置已重置為預設值', config: defaultConfig });
     } catch (error) {
@@ -1947,7 +2057,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
                 }
             });
         }
-
+        
         // 調用 OpenAI API
         const openaiResponse = await axios.post(
             'https://api.openai.com/v1/chat/completions',
@@ -2169,21 +2279,21 @@ app.get('/api/public-chat/context', async (req, res) => {
 
 // 根路由 - 健康檢查
 app.get('/', (req, res) => {
-                res.json({
-                    success: true,
+        res.json({
+            success: true,
         message: 'EchoChat API 服務運行中',
         version: '1.0.0',
-                    timestamp: new Date().toISOString()
-                });
+        timestamp: new Date().toISOString()
+    });
 });
-                
+
 // API 健康檢查端點
 app.get('/api/health', (req, res) => {
-                res.json({
-                    success: true,
+    res.json({
+        success: true,
         message: 'EchoChat API 健康檢查通過',
-                    timestamp: new Date().toISOString()
-                });
+        timestamp: new Date().toISOString()
+    });
 });
 
 // ==================== AI 模型 API ====================
@@ -2240,7 +2350,7 @@ app.get('/api/ai-models', (req, res) => {
       message: 'AI 模型列表獲取成功',
       data: models
         });
-        } catch (error) {
+    } catch (error) {
     console.error('獲取 AI 模型列表錯誤:', error);
         res.status(500).json({
             success: false,
@@ -2330,8 +2440,8 @@ app.get('/api/channels', authenticateJWT, (req, res) => {
         
     } catch (error) {
         console.error('獲取頻道列表錯誤:', error);
-                res.status(500).json({
-                    success: false,
+        res.status(500).json({
+            success: false,
             error: '獲取頻道列表失敗'
         });
     }
@@ -2457,7 +2567,7 @@ app.post('/api/channels/test', authenticateJWT, async (req, res) => {
                 });
                 } catch (error) {
                 res.json({
-                success: false,
+                    success: false,
                     error: 'LINE 頻道連接測試失敗'
                 });
             }
@@ -2517,7 +2627,7 @@ app.get('/api/mobile/line-integrations', authenticateJWT, (req, res) => {
             integrations: integrations
         });
         
-    } catch (error) {
+                } catch (error) {
         console.error('獲取 LINE 整合列表錯誤:', error);
         res.status(500).json({
             success: false,
@@ -2570,7 +2680,7 @@ app.get('/api/mobile/line-conversations/:tenantId', authenticateJWT, (req, res) 
     } catch (error) {
         console.error('獲取 LINE 對話記錄錯誤:', error);
         res.status(500).json({
-                success: false,
+            success: false,
             error: '獲取 LINE 對話記錄失敗'
         });
     }
@@ -2594,15 +2704,15 @@ app.get('/api/mobile/conversation/:conversationId', authenticateJWT, (req, res) 
             });
         }
         
-        res.json({
-            success: true,
+    res.json({
+        success: true,
             conversation: conversation
 });
 
     } catch (error) {
         console.error('獲取對話詳情錯誤:', error);
-        res.status(500).json({
-            success: false,
+    res.status(500).json({
+        success: false,
             error: '獲取對話詳情失敗'
         });
     }
@@ -2646,7 +2756,7 @@ app.post('/api/mobile/line-test-message/:tenantId', authenticateJWT, (req, res) 
     } catch (error) {
         console.error('發送測試訊息錯誤:', error);
         res.status(500).json({
-                success: false,
+            success: false,
             error: '發送測試訊息失敗'
         });
     }
@@ -2666,7 +2776,7 @@ app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
         
         if (!channel) {
             return res.status(404).json({
-                success: false,
+            success: false,
                 error: '頻道不存在'
             });
         }
@@ -2687,7 +2797,7 @@ app.get('/api/mobile/line-stats/:tenantId', authenticateJWT, (req, res) => {
         
         // 計算平均訊息數
         const averageMessages = totalConversations > 0 ? (totalMessages / totalConversations).toFixed(1) : 0;
-        
+
         res.json({
             success: true,
             stats: {
@@ -2715,7 +2825,7 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
         
         if (!query) {
             return res.status(400).json({
-                success: false,
+            success: false,
                 error: '請提供搜尋關鍵字'
             });
         }
@@ -2748,7 +2858,7 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
         const startIndex = (page - 1) * limit;
         const endIndex = startIndex + parseInt(limit);
         const paginatedConversations = conversations.slice(startIndex, endIndex);
-        
+
         res.json({
             success: true,
             conversations: paginatedConversations,
@@ -2805,7 +2915,7 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
     } catch (error) {
         console.error('獲取帳務總覽錯誤:', error);
         res.status(500).json({
-                success: false,
+            success: false,
             error: '獲取帳務總覽失敗'
         });
     }
@@ -2930,16 +3040,16 @@ app.get('/api/billing/customers', authenticateJWT, (req, res) => {
                 lastActivity: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString()
             }
         ];
-            
-            res.json({
-                success: true,
+
+        res.json({
+            success: true,
             customers: customers
-            });
+        });
         
-        } catch (error) {
+    } catch (error) {
         console.error('獲取客戶使用量錯誤:', error);
-            res.status(500).json({
-                success: false,
+        res.status(500).json({
+            success: false,
             error: '獲取客戶使用量失敗'
         });
     }
@@ -3585,7 +3695,7 @@ const startServer = async () => {
         
         // 啟動伺服器
         const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+        app.listen(PORT, () => {
             console.log('🚀 EchoChat API server is running on port', PORT);
             console.log('📝 API 端點: http://localhost:' + PORT + '/api');
             console.log('🔍 健康檢查: http://localhost:' + PORT + '/api/health');
