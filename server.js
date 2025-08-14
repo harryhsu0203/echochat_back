@@ -1369,6 +1369,11 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
         const user = findStaffById(req.staff.id);
         if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
 
+        // 基本防呆：確認金流環境變數已設定
+        if (!ECPAY_MERCHANT_ID || !ECPAY_HASH_KEY || !ECPAY_HASH_IV || !ECPAY_RETURN_URL || !ECPAY_ORDER_RESULT_URL || !ECPAY_CLIENT_BACK_URL) {
+            return res.status(400).json({ success: false, error: '金流尚未完成設定，請稍後再試或聯繫管理員（缺少 ECPay 參數）' });
+        }
+
         // 建立綠界訂單參數
         const tradeNo = `EC${Date.now()}`;
         const date = new Date();
@@ -1376,6 +1381,14 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
         const tradeDate = `${date.getFullYear()}/${pad2(date.getMonth()+1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
         const { type = 'plan', amount = 2990, tokens = 0 } = req.body || {};
         const totalAmount = Math.max(parseInt(amount, 10) || 0, 0);
+
+        // 參數檢查：金額與儲值數量
+        if (totalAmount <= 0) {
+            return res.status(400).json({ success: false, error: '金額不正確，請選擇有效金額' });
+        }
+        if (type === 'topup' && (!tokens || parseInt(tokens, 10) <= 0)) {
+            return res.status(400).json({ success: false, error: '儲值數量不正確，請選擇有效的 Token 數量' });
+        }
         const orderParams = {
             MerchantID: ECPAY_MERCHANT_ID,
             MerchantTradeNo: tradeNo,
