@@ -876,6 +876,29 @@ app.post('/api/knowledge', authenticateJWT, (req, res) => {
     }
 });
 
+// 更新知識庫項目
+app.put('/api/knowledge/:id', authenticateJWT, (req, res) => {
+    try {
+        const id = parseInt(req.params.id);
+        if (!id || Number.isNaN(id)) {
+            return res.status(400).json({ success: false, error: 'ID 不正確' });
+        }
+        const { question, answer, category, tags } = req.body || {};
+        loadDatabase();
+        const idx = (database.knowledge || []).findIndex(k => k.id === id && (k.user_id === req.staff.id));
+        if (idx === -1) return res.status(404).json({ success: false, error: '項目不存在' });
+        if (typeof question === 'string' && question.trim()) database.knowledge[idx].question = question.trim();
+        if (typeof answer === 'string' && answer.trim()) database.knowledge[idx].answer = answer.trim();
+        if (typeof category === 'string') database.knowledge[idx].category = category;
+        if (typeof tags !== 'undefined') database.knowledge[idx].tags = tags;
+        database.knowledge[idx].updated_at = new Date().toISOString();
+        saveDatabase();
+        res.json({ success: true, item: database.knowledge[idx] });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '無法更新知識庫項目' });
+    }
+});
+
 app.delete('/api/knowledge/:id', authenticateJWT, (req, res) => {
     try {
         const id = parseInt(req.params.id);
