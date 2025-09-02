@@ -902,13 +902,51 @@ app.put('/api/knowledge/:id', authenticateJWT, (req, res) => {
 app.delete('/api/knowledge/:id', authenticateJWT, (req, res) => {
     try {
         const id = parseInt(req.params.id);
-        const idx = (database.knowledge || []).findIndex(k => k.id === id && (k.user_id === req.staff.id));
+        const items = Array.isArray(database.knowledge) ? database.knowledge : [];
+        const idx = items.findIndex(k => k.id === id);
         if (idx === -1) return res.status(404).json({ success: false, error: '項目不存在' });
+        const item = items[idx];
+        // 允許刪除條件：本人擁有、未綁定(user_id 為空)、或管理員
+        const isOwner = item.user_id === req.staff.id;
+        const isUnowned = typeof item.user_id === 'undefined' || item.user_id === null;
+        const isAdmin = String(req.staff.role || '') === 'admin';
+        if (!isOwner && !isUnowned && !isAdmin) {
+            return res.status(403).json({ success: false, error: '無權刪除此項目' });
+        }
         const removed = database.knowledge.splice(idx, 1)[0];
         saveDatabase();
         res.json({ success: true, item: removed });
     } catch (error) {
         res.status(500).json({ success: false, error: '刪除知識失敗' });
+    }
+});
+
+// 批次刪除知識庫
+app.post('/api/knowledge/bulk-delete', authenticateJWT, (req, res) => {
+    try {
+        const { ids } = req.body || {};
+        if (!Array.isArray(ids) || ids.length === 0) {
+            return res.status(400).json({ success: false, error: '缺少 ids' });
+        }
+        const isAdmin = String(req.staff.role || '') === 'admin';
+        loadDatabase();
+        const items = Array.isArray(database.knowledge) ? database.knowledge : [];
+        let deleted = 0;
+        for (const id of ids) {
+            const idx = items.findIndex(k => k.id === id);
+            if (idx === -1) continue;
+            const item = items[idx];
+            const isOwner = item.user_id === req.staff.id;
+            const isUnowned = typeof item.user_id === 'undefined' || item.user_id === null;
+            if (isOwner || isUnowned || isAdmin) {
+                database.knowledge.splice(idx, 1);
+                deleted++;
+            }
+        }
+        saveDatabase();
+        return res.json({ success: true, deleted });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: '批次刪除失敗' });
     }
 });
 
