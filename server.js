@@ -577,6 +577,7 @@ let database = {
     knowledge: [],
     user_states: [],
     chat_history: [],
+    channels: [],
     ai_assistant_config: [],
     email_verifications: [], // 儲存電子郵件驗證碼
     password_reset_requests: [], // 儲存密碼重設請求
@@ -597,6 +598,7 @@ const loadDatabase = () => {
                 knowledge: loadedData.knowledge || [],
                 user_states: loadedData.user_states || [],
                 chat_history: loadedData.chat_history || [],
+                channels: loadedData.channels || [],
                 ai_assistant_config: loadedData.ai_assistant_config || [],
                 email_verifications: loadedData.email_verifications || [],
                 password_reset_requests: loadedData.password_reset_requests || [],
