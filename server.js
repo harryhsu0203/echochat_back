@@ -3119,43 +3119,31 @@ app.get('/api/mobile/search-conversations/:tenantId', authenticateJWT, (req, res
 
 // ==================== 帳務系統 API ====================
 
-// 獲取帳務總覽
+// 獲取帳務總覽（改用使用者真實配額）
 app.get('/api/billing/overview', authenticateJWT, (req, res) => {
     try {
         loadDatabase();
-        
-        // 模擬帳務資料
+        const user = getUserById(req.staff.id);
+        ensureUserTokenFields(user);
+        maybeResetCycle(user);
+        const plan = user.plan || 'free';
+        const allowance = getPlanAllowance(plan, user);
+        const used = user.token_used_in_cycle || 0;
+        const bonus = user.token_bonus_balance || 0;
+        const available = Math.max(allowance - used, 0) + bonus;
         const overview = {
-            currentPlan: 'Pro',
-            nextBillingDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            totalUsage: {
-                conversations: 1250,
-                messages: 8500,
-                apiCalls: 15000
-            },
-            limits: {
-                conversations: 2000,
-                messages: 10000,
-                apiCalls: 20000
-            },
-            usage: {
-                conversations: 62.5,
-                messages: 85.0,
-                apiCalls: 75.0
-            }
+            currentPlan: plan,
+            nextBillingDate: user.next_billing_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            tokenAllowance: allowance,
+            tokenUsed: used,
+            tokenBonus: bonus,
+            tokenAvailable: available,
+            usagePercent: allowance > 0 ? Math.min((used / allowance) * 100, 100).toFixed(1) : 0
         };
-
-        res.json({
-            success: true,
-            overview: overview
-        });
-        
+        res.json({ success: true, overview });
     } catch (error) {
         console.error('獲取帳務總覽錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '獲取帳務總覽失敗'
-        });
+        res.status(500).json({ success: false, error: '獲取帳務總覽失敗' });
     }
 });
 
@@ -3787,6 +3775,22 @@ async function handleLineMessage(event, userId) {
             saveDatabase();
         } catch (e) {
             console.warn('生成/回推 AI 回覆失敗:', e.message);
+            // 針對常見情況提供使用者可見的告知訊息
+            let fallback = '目前暫時無法回覆，請稍後再試。';
+            if (String(e?.message || '').includes('餘額不足')) {
+                fallback = '目前餘額不足，請至儀表板加值後再試。';
+            } else if (!process.env.OPENAI_API_KEY) {
+                fallback = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
+            }
+            try {
+                const creds = getLineCredentials(userId);
+                if (creds && creds.channelAccessToken) {
+                    const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+                    await client.pushMessage(sourceUserId, { type: 'text', text: fallback });
+                }
+            } catch { /* ignore push error */ }
+            conv.messages.push({ role: 'assistant', content: fallback, timestamp: new Date().toISOString() });
+            saveDatabase();
         }
         
     } catch (error) {
