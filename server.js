@@ -1668,9 +1668,12 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
                 id: c.id,
                 platform: c.platform || (String(c.id || '').split('_')[0] || 'unknown'),
                 userId: c.userId || userId,
+                customerName: c.customerName || '未知客戶',
+                customerPicture: c.customerPicture || null,
                 lastMessage: (c.messages && c.messages.length)
                     ? (c.messages[c.messages.length - 1].content || '')
                     : (c.content || ''),
+                messageCount: (c.messages && c.messages.length) || 0,
                 updatedAt: c.updatedAt || new Date().toISOString()
             }))
             .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
@@ -3749,10 +3752,22 @@ async function handleLineMessage(event, userId) {
         const message = event.message;
         const sourceUserId = event.source.userId;
         
-        console.log('💬 收到訊息:', message.text || message.type);
+        console.log('💬 收到訊息:', message.text || message.type, 'from:', sourceUserId);
         
-        // 這裡可以添加自動回應邏輯
-        // 例如：根據 AI 設定生成回應，保存訊息到資料庫等
+        // 取得用戶資料（名稱與照片）
+        let displayName = sourceUserId;
+        let pictureUrl = null;
+        try {
+            const creds = getLineCredentials(userId);
+            if (creds && creds.channelAccessToken) {
+                const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+                const profile = await client.getProfile(sourceUserId);
+                displayName = profile.displayName || sourceUserId;
+                pictureUrl = profile.pictureUrl || null;
+            }
+        } catch (profileErr) {
+            console.warn('無法取得 LINE 用戶資料:', profileErr.message);
+        }
         
         // 寫入使用者專屬對話記錄（依 userId 隔離）
         loadDatabase();
@@ -3760,8 +3775,21 @@ async function handleLineMessage(event, userId) {
         const convId = `line_${userId}_${sourceUserId}`;
         let conv = database.chat_history.find(c => c.id === convId);
         if (!conv) {
-            conv = { id: convId, userId, platform: 'line', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+            conv = { 
+                id: convId, 
+                userId, 
+                platform: 'line', 
+                customerName: displayName,
+                customerPicture: pictureUrl,
+                messages: [], 
+                createdAt: new Date().toISOString(), 
+                updatedAt: new Date().toISOString() 
+            };
             database.chat_history.push(conv);
+        } else {
+            // 更新客戶名稱與照片（每次互動都更新）
+            conv.customerName = displayName;
+            conv.customerPicture = pictureUrl;
         }
         conv.messages.push({ role: 'user', content: message.text || '', timestamp: new Date().toISOString() });
         conv.updatedAt = new Date().toISOString();
@@ -3775,6 +3803,9 @@ async function handleLineMessage(event, userId) {
             if (creds && creds.channelAccessToken) {
                 const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
                 await client.pushMessage(sourceUserId, { type: 'text', text: reply });
+                console.log('✅ LINE 訊息回推成功');
+            } else {
+                console.warn('❌ 無 LINE 憑證，無法回推');
             }
             conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
             saveDatabase();
@@ -3792,8 +3823,9 @@ async function handleLineMessage(event, userId) {
                 if (creds && creds.channelAccessToken) {
                     const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
                     await client.pushMessage(sourceUserId, { type: 'text', text: fallback });
+                    console.log('✅ 錯誤訊息回推成功');
                 }
-            } catch { /* ignore push error */ }
+            } catch { console.warn('❌ 錯誤訊息回推失敗'); }
             conv.messages.push({ role: 'assistant', content: fallback, timestamp: new Date().toISOString() });
             saveDatabase();
         }
