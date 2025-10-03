@@ -1682,6 +1682,25 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
     }
 });
 
+// 取得單一對話詳情
+app.get('/api/conversations/:conversationId', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        const userId = req.staff.id;
+        const { conversationId } = req.params;
+        const conv = (database.chat_history || []).find(c => {
+            if (!c) return false;
+            if (c.id === conversationId && (!c.userId || c.userId === userId)) return true;
+            const id = String(c.id || '');
+            return id === conversationId && (id.startsWith(`line_${userId}_`) || id.startsWith(`slack_${userId}_`) || id.startsWith(`telegram_${userId}_`) || id.startsWith(`messenger_${userId}_`) || id.startsWith(`discord_${userId}_`));
+        });
+        if (!conv) return res.status(404).json({ success: false, error: '對話不存在' });
+        return res.json({ success: true, conversation: conv });
+    } catch (error) {
+        return res.status(500).json({ success: false, error: '無法取得對話詳情' });
+    }
+});
+
 // 帳號管理 API
 app.get('/api/accounts', authenticateJWT, checkRole(['admin']), (req, res) => {
     try {
