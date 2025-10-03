@@ -3829,7 +3829,10 @@ async function handleLineMessage(event, userId) {
 
         // 生成 AI 回覆並嘗試回推
         try {
-            const { reply } = await generateAIReplyForUser(userId, message.text || '', true);
+            console.log('📝 開始生成 AI 回覆，knowledgeOnly: true');
+            const { reply } = await generateAIReplyForUser(userId, message.text || '', false);
+            console.log('✅ AI 回覆生成成功，長度:', reply.length);
+            
             // 回推 LINE 訊息（若有保存憑證）
             const creds = getLineCredentials(userId);
             if (creds && creds.channelAccessToken) {
@@ -3843,6 +3846,7 @@ async function handleLineMessage(event, userId) {
             saveDatabase();
         } catch (e) {
             console.warn('生成/回推 AI 回覆失敗:', e.message);
+            console.error('完整錯誤:', e);
             // 針對常見情況提供使用者可見的告知訊息
             let fallback = '目前暫時無法回覆，請稍後再試。';
             if (String(e?.message || '').includes('餘額不足')) {
