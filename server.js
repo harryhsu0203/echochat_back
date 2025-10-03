@@ -3131,6 +3131,9 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
         const used = user.token_used_in_cycle || 0;
         const bonus = user.token_bonus_balance || 0;
         const available = Math.max(allowance - used, 0) + bonus;
+        const myConvs = (database.chat_history || []).filter(c => c && c.userId === req.staff.id);
+        const msgCount = myConvs.reduce((sum, c) => sum + (c.messages ? c.messages.length : 0), 0);
+        
         const overview = {
             currentPlan: plan,
             nextBillingDate: user.next_billing_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
@@ -3138,7 +3141,9 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
             tokenUsed: used,
             tokenBonus: bonus,
             tokenAvailable: available,
-            usagePercent: allowance > 0 ? Math.min((used / allowance) * 100, 100).toFixed(1) : 0
+            usagePercent: allowance > 0 ? Math.min((used / allowance) * 100, 100).toFixed(1) : 0,
+            conversationCount: myConvs.length,
+            messageCount: msgCount
         };
         res.json({ success: true, overview });
     } catch (error) {
