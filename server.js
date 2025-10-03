@@ -1642,25 +1642,43 @@ app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (
     }
 });
 
-// 對話列表（最小可用實作）
+// 對話列表（讀取實際 chat_history，僅顯示當前使用者相關）
 app.get('/api/conversations', authenticateJWT, (req, res) => {
     try {
-        const sampleConversations = [
-            {
-                id: 1,
-                user: '訪客A',
-                lastMessage: '您好，想了解方案價格',
-                timestamp: new Date().toISOString(),
-                status: 'open',
-                tags: []
-            }
-        ];
-        return res.json(sampleConversations);
+        loadDatabase();
+        const userId = req.staff.id;
+
+        // 過濾屬於該使用者的對話（依 userId 或 id 前綴）
+        const belongsToUser = (conv) => {
+            if (!conv) return false;
+            if (conv.userId && conv.userId === userId) return true;
+            const id = String(conv.id || '');
+            return (
+                id.startsWith(`line_${userId}_`) ||
+                id.startsWith(`slack_${userId}_`) ||
+                id.startsWith(`telegram_${userId}_`) ||
+                id.startsWith(`messenger_${userId}_`) ||
+                id.startsWith(`discord_${userId}_`)
+            );
+        };
+
+        const list = (database.chat_history || [])
+            .filter(belongsToUser)
+            .map((c) => ({
+                id: c.id,
+                platform: c.platform || (String(c.id || '').split('_')[0] || 'unknown'),
+                userId: c.userId || userId,
+                lastMessage: (c.messages && c.messages.length)
+                    ? (c.messages[c.messages.length - 1].content || '')
+                    : (c.content || ''),
+                updatedAt: c.updatedAt || new Date().toISOString()
+            }))
+            .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+        // 為保持前端相容性，直接回傳陣列（不包 success）
+        return res.json(list);
     } catch (error) {
-            return res.status(500).json({
-            success: false,
-            error: '無法取得對話列表'
-        });
+        return res.status(500).json({ success: false, error: '無法取得對話列表' });
     }
 });
 
