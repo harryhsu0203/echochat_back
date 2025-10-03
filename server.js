@@ -405,13 +405,23 @@ function findUserChannel(userId, platform) {
     return { ...ch, apiKey, secret };
 }
 
-// 取得 LINE 憑證
+// 取得 LINE 憑證（優先從記憶體快取，提升效能並避免解密問題）
 function getLineCredentials(userId) {
+    // 優先從記憶體快取取得（保存時已放入明文）
+    if (lineAPISettings[userId] && lineAPISettings[userId].channelAccessToken && lineAPISettings[userId].channelSecret) {
+        return {
+            channelAccessToken: lineAPISettings[userId].channelAccessToken,
+            channelSecret: lineAPISettings[userId].channelSecret
+        };
+    }
+    // 若快取不存在，從資料庫讀取並解密
     loadDatabase();
     const rec = (database.line_api_settings || []).find(r => r.user_id === userId);
     if (!rec) return null;
     const token = decryptSensitive(rec.channel_access_token) || rec.channel_access_token || '';
     const secret = decryptSensitive(rec.channel_secret) || rec.channel_secret || '';
+    // 同時更新快取
+    lineAPISettings[userId] = { channelAccessToken: token, channelSecret: secret };
     return { channelAccessToken: token, channelSecret: secret };
 }
 
@@ -3418,6 +3428,9 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             });
         }
 
+        console.log('📝 準備儲存 LINE Token，userId:', userId);
+        console.log('   Token 長度:', channelAccessToken.length, 'Secret 長度:', channelSecret.length);
+        
         loadDatabase();
         if (!database.line_api_settings) database.line_api_settings = [];
         const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
@@ -3427,23 +3440,36 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             user_id: userId,
             channel_access_token: encryptedToken || channelAccessToken,
             channel_secret: encryptedSecret || channelSecret,
-            webhook_url: webhookUrl || `${req.protocol}://${req.get('host')}/api/webhook/line/${userId}`,
+            webhook_url: webhookUrl || `https://${req.get('host')}/api/webhook/line/${userId}`,
             updated_at: new Date().toISOString()
         };
-        if (idx >= 0) database.line_api_settings[idx] = record; else database.line_api_settings.push(record);
+        if (idx >= 0) {
+            database.line_api_settings[idx] = record;
+            console.log('✅ 更新現有記錄，index:', idx);
+        } else {
+            database.line_api_settings.push(record);
+            console.log('✅ 新增記錄');
+        }
         saveDatabase();
 
+        // 更新記憶體快取（用於回推時快速取得）
         lineAPISettings[userId] = {
-            channelAccessToken: encryptedToken ? 'Encrypted' : channelAccessToken,
-            channelSecret: encryptedSecret ? 'Encrypted' : channelSecret,
+            channelAccessToken: channelAccessToken,
+            channelSecret: channelSecret,
             webhookUrl: record.webhook_url,
             updatedAt: record.updated_at
         };
+        
+        console.log('✅ LINE Token 已儲存並更新快取');
 
         res.json({
             success: true,
             message: 'LINE API 設定保存成功',
-            data: lineAPISettings[userId]
+            data: {
+                channelAccessToken: 'Configured',
+                channelSecret: 'Configured',
+                webhookUrl: record.webhook_url
+            }
         });
     } catch (error) {
         console.error('保存 LINE API 設定錯誤:', error);
