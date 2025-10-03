@@ -1651,7 +1651,8 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
         // 過濾屬於該使用者的對話（依 userId 或 id 前綴）
         const belongsToUser = (conv) => {
             if (!conv) return false;
-            if (conv.userId && conv.userId === userId) return true;
+            // 嚴格比對 userId（數字或字串都支援）
+            if (conv.userId && String(conv.userId) === String(userId)) return true;
             const id = String(conv.id || '');
             return (
                 id.startsWith(`line_${userId}_`) ||
@@ -3777,10 +3778,11 @@ async function handleLineMessage(event, userId) {
         if (!conv) {
             conv = { 
                 id: convId, 
-                userId, 
+                userId: parseInt(userId),
                 platform: 'line', 
                 customerName: displayName,
                 customerPicture: pictureUrl,
+                customerLineId: sourceUserId,
                 messages: [], 
                 createdAt: new Date().toISOString(), 
                 updatedAt: new Date().toISOString() 
@@ -3790,6 +3792,8 @@ async function handleLineMessage(event, userId) {
             // 更新客戶名稱與照片（每次互動都更新）
             conv.customerName = displayName;
             conv.customerPicture = pictureUrl;
+            conv.customerLineId = sourceUserId;
+            if (!conv.userId) conv.userId = parseInt(userId);
         }
         conv.messages.push({ role: 'user', content: message.text || '', timestamp: new Date().toISOString() });
         conv.updatedAt = new Date().toISOString();
