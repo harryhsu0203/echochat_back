@@ -426,6 +426,75 @@ function getLineCredentials(userId) {
     return { channelAccessToken: token, channelSecret: secret };
 }
 
+// 以使用者知識庫產生 AI 回覆並扣點（支援對話歷史）
+async function generateAIReplyWithHistory(userId, messageHistory, currentMessage) {
+    if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY 未設置');
+    loadDatabase();
+    const user = getUserById(userId);
+    if (!user) throw new Error('使用者不存在');
+    const aiConfig = getUserAIConfig(userId);
+    ensureUserTokenFields(user);
+    maybeResetCycle(user);
+
+    const normalized = (text) => (text || '').toLowerCase();
+    const terms = normalized(currentMessage).replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(t => t.length >= 2).slice(0, 20);
+    let knowledgeContext = '';
+    const userKnowledge = (database.knowledge || []).filter(k => k.user_id === userId);
+    const scored = userKnowledge.map(k => {
+        const text = `${k.question} ${k.answer}`.toLowerCase();
+        const score = terms.reduce((acc, t) => acc + (text.includes(t) ? 1 : 0), 0);
+        return { item: k, score };
+    }).filter(s => s.score > 0);
+    scored.sort((a, b) => b.score - a.score);
+    let top = scored.slice(0, 5).map(s => s.item);
+    if (top.length === 0 && userKnowledge.length > 0) {
+        const sortedByTime = [...userKnowledge].sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+        top = sortedByTime.slice(0, 3);
+    }
+    if (top.length) {
+        knowledgeContext = top.map((k, idx) => `【來源${idx + 1}】Q: ${k.question}\nA: ${k.answer}`).join('\n\n');
+        if (knowledgeContext.length > 4000) knowledgeContext = knowledgeContext.slice(0, 4000);
+    }
+
+    const systemPrompt = `你是 ${aiConfig.assistant_name}，${aiConfig.description}。你的使用場景是：${aiConfig.use_case}。請根據用戶的問題提供專業、友善且有用的回應。`;
+    
+    // 構建包含對話歷史的訊息陣列
+    const messages = [
+        { role: 'system', content: systemPrompt + (knowledgeContext ? `\n\n以下為商家提供的知識庫內容，優先據此回答；若知識庫無相關資訊再自行作答，並標註「一般建議」。\n${knowledgeContext}` : '') }
+    ];
+    
+    // 添加對話歷史（限制最近 10 輪對話以避免 token 過多）
+    const recentMessages = messageHistory.slice(-20); // 最近 20 條訊息
+    for (const msg of recentMessages) {
+        if (msg.role === 'user' || msg.role === 'assistant') {
+            messages.push({ role: msg.role, content: msg.content });
+        }
+    }
+
+    const planAllowance = getPlanAllowance(user?.plan || 'free', user);
+    const estimatedTokens = estimateChatTokens(currentMessage, knowledgeContext, 800); // 增加估計值因為有歷史
+    const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
+    if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
+
+    const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+        model: aiConfig.llm || 'gpt-3.5-turbo',
+        messages,
+        max_tokens: 800,
+        temperature: 0.6
+    }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' } });
+    const aiReply = openaiResponse.data.choices[0].message.content.trim();
+
+    let remainingNeed = estimatedTokens;
+    const cycleRemain = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0);
+    const useFromCycle = Math.min(cycleRemain, remainingNeed);
+    user.token_used_in_cycle = (user.token_used_in_cycle || 0) + useFromCycle;
+    remainingNeed -= useFromCycle;
+    if (remainingNeed > 0) user.token_bonus_balance = Math.max((user.token_bonus_balance || 0) - remainingNeed, 0);
+    saveDatabase();
+
+    return { reply: aiReply, model: aiConfig.llm, assistantName: aiConfig.assistant_name };
+}
+
 // 以使用者知識庫產生 AI 回覆並扣點
 async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY 未設置');
@@ -3841,7 +3910,8 @@ async function handleLineMessage(event, userId) {
             const userIdInt = parseInt(userId);
             console.log('   userIdInt:', userIdInt);
             
-            const { reply } = await generateAIReplyForUser(userIdInt, message.text || '', false);
+            // 使用對話歷史生成回覆
+            const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, message.text || '');
             console.log('✅ AI 回覆生成成功，長度:', reply.length);
             replyText = reply;
             replySuccess = true;
