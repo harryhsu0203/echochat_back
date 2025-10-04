@@ -665,7 +665,8 @@ let database = {
     ai_assistant_configs: [],
     email_verifications: [], // 儲存電子郵件驗證碼
     password_reset_requests: [], // 儲存密碼重設請求
-    line_api_settings: [] // 每位使用者的 LINE Token 設定
+    line_api_settings: [], // 每位使用者的 LINE Token 設定
+    line_bots: [] // 每位使用者的多個 LINE Bot 設定
 };
 
 // 載入現有資料
@@ -686,7 +687,8 @@ const loadDatabase = () => {
                 ai_assistant_configs: loadedData.ai_assistant_configs || [],
                 email_verifications: loadedData.email_verifications || [],
                 password_reset_requests: loadedData.password_reset_requests || [],
-                line_api_settings: loadedData.line_api_settings || []
+                line_api_settings: loadedData.line_api_settings || [],
+                line_bots: loadedData.line_bots || []
             };
         }
     } catch (error) {
@@ -4142,6 +4144,376 @@ app.post('/api/conversation/toggle-auto-reply', authenticateJWT, async (req, res
         });
     }
 });
+
+// ==================== 多個 LINE Bot 管理 ====================
+
+// 獲取使用者的所有 LINE Bot
+app.get('/api/line-bots', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        loadDatabase();
+        
+        const userBots = (database.line_bots || []).filter(bot => bot.user_id === userId);
+        
+        // 不返回敏感的 Token 和 Secret
+        const safeBots = userBots.map(bot => ({
+            id: bot.id,
+            name: bot.name,
+            description: bot.description,
+            channel_id: bot.channel_id,
+            webhook_url: bot.webhook_url,
+            status: bot.status || 'inactive',
+            created_at: bot.created_at,
+            updated_at: bot.updated_at,
+            message_count: bot.message_count || 0,
+            conversation_count: bot.conversation_count || 0
+        }));
+        
+        res.json({
+            success: true,
+            bots: safeBots
+        });
+        
+    } catch (error) {
+        console.error('獲取 LINE Bot 列表錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '獲取 Bot 列表失敗'
+        });
+    }
+});
+
+// 創建新的 LINE Bot
+app.post('/api/line-bots', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const { name, description, channelAccessToken, channelSecret, channelId } = req.body;
+        
+        if (!name || !channelAccessToken || !channelSecret) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供 Bot 名稱、Token 和 Secret'
+            });
+        }
+        
+        loadDatabase();
+        if (!database.line_bots) database.line_bots = [];
+        
+        // 檢查是否已存在相同名稱的 Bot
+        const existingBot = database.line_bots.find(bot => 
+            bot.user_id === userId && bot.name === name
+        );
+        
+        if (existingBot) {
+            return res.status(400).json({
+                success: false,
+                error: '已存在相同名稱的 Bot'
+            });
+        }
+        
+        const botId = `bot_${userId}_${Date.now()}`;
+        const webhookUrl = `https://echochat-api.onrender.com/api/webhook/line-bot/${botId}`;
+        
+        const newBot = {
+            id: botId,
+            user_id: userId,
+            name: name,
+            description: description || '',
+            channel_id: channelId || '',
+            channel_access_token: encryptSensitive(channelAccessToken),
+            channel_secret: encryptSensitive(channelSecret),
+            webhook_url: webhookUrl,
+            status: 'active',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            message_count: 0,
+            conversation_count: 0
+        };
+        
+        database.line_bots.push(newBot);
+        saveDatabase();
+        
+        console.log(`✅ 用戶 ${userId} 創建新 Bot: ${name} (ID: ${botId})`);
+        
+        res.json({
+            success: true,
+            message: 'LINE Bot 創建成功',
+            bot: {
+                id: newBot.id,
+                name: newBot.name,
+                description: newBot.description,
+                webhook_url: newBot.webhook_url,
+                status: newBot.status,
+                created_at: newBot.created_at
+            }
+        });
+        
+    } catch (error) {
+        console.error('創建 LINE Bot 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '創建 Bot 失敗'
+        });
+    }
+});
+
+// 更新 LINE Bot 設定
+app.put('/api/line-bots/:botId', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const { botId } = req.params;
+        const { name, description, channelAccessToken, channelSecret, status } = req.body;
+        
+        loadDatabase();
+        const botIndex = database.line_bots.findIndex(bot => 
+            bot.id === botId && bot.user_id === userId
+        );
+        
+        if (botIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到指定的 Bot'
+            });
+        }
+        
+        const bot = database.line_bots[botIndex];
+        
+        // 更新可更新的欄位
+        if (name) bot.name = name;
+        if (description !== undefined) bot.description = description;
+        if (channelAccessToken) bot.channel_access_token = encryptSensitive(channelAccessToken);
+        if (channelSecret) bot.channel_secret = encryptSensitive(channelSecret);
+        if (status) bot.status = status;
+        
+        bot.updated_at = new Date().toISOString();
+        database.line_bots[botIndex] = bot;
+        saveDatabase();
+        
+        console.log(`✅ 用戶 ${userId} 更新 Bot ${botId}`);
+        
+        res.json({
+            success: true,
+            message: 'Bot 設定更新成功'
+        });
+        
+    } catch (error) {
+        console.error('更新 LINE Bot 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '更新 Bot 失敗'
+        });
+    }
+});
+
+// 刪除 LINE Bot
+app.delete('/api/line-bots/:botId', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const { botId } = req.params;
+        
+        loadDatabase();
+        const botIndex = database.line_bots.findIndex(bot => 
+            bot.id === botId && bot.user_id === userId
+        );
+        
+        if (botIndex === -1) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到指定的 Bot'
+            });
+        }
+        
+        // 刪除相關的對話記錄
+        database.chat_history = (database.chat_history || []).filter(conv => 
+            !conv.bot_id || conv.bot_id !== botId
+        );
+        
+        // 刪除 Bot
+        database.line_bots.splice(botIndex, 1);
+        saveDatabase();
+        
+        console.log(`✅ 用戶 ${userId} 刪除 Bot ${botId}`);
+        
+        res.json({
+            success: true,
+            message: 'Bot 刪除成功'
+        });
+        
+    } catch (error) {
+        console.error('刪除 LINE Bot 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '刪除 Bot 失敗'
+        });
+    }
+});
+
+// 處理多個 LINE Bot 的 Webhook
+app.post('/api/webhook/line-bot/:botId', async (req, res) => {
+    try {
+        const { botId } = req.params;
+        const events = req.body.events || [];
+        
+        console.log(`📨 收到 LINE Bot ${botId} 的 Webhook，事件數量: ${events.length}`);
+        
+        // 查找 Bot 設定
+        loadDatabase();
+        const bot = database.line_bots.find(b => b.id === botId);
+        
+        if (!bot) {
+            console.warn(`❌ 找不到 Bot ${botId}`);
+            return res.status(404).json({ success: false, error: 'Bot 不存在' });
+        }
+        
+        if (bot.status !== 'active') {
+            console.warn(`⚠️ Bot ${botId} 狀態為 ${bot.status}，忽略訊息`);
+            return res.json({ success: true, message: 'Bot 未啟用' });
+        }
+        
+        // 處理每個事件
+        for (const event of events) {
+            await handleLineBotMessage(event, bot);
+        }
+        
+        res.json({ success: true, message: 'Webhook 處理完成' });
+        
+    } catch (error) {
+        console.error('處理 LINE Bot Webhook 錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '處理 Webhook 失敗'
+        });
+    }
+});
+
+// 處理 LINE Bot 訊息事件
+async function handleLineBotMessage(event, bot) {
+    try {
+        const message = event.message;
+        const sourceUserId = event.source.userId;
+        const messageContent = message.text || '';
+        const messageId = message.id || `${sourceUserId}_${Date.now()}`;
+        
+        // 生成快取鍵（包含 Bot ID）
+        const cacheKey = `line_bot_${bot.id}_${sourceUserId}_${messageId}_${messageContent}`;
+        
+        // 檢查是否已經處理過相同的訊息
+        if (messageCache.has(cacheKey)) {
+            console.log('⚠️ Bot 訊息已處理過，跳過:', messageContent);
+            return;
+        }
+        
+        // 將訊息加入快取（5 分鐘後自動清除）
+        messageCache.set(cacheKey, true);
+        setTimeout(() => messageCache.delete(cacheKey), 5 * 60 * 1000);
+        
+        console.log('💬 Bot 收到訊息:', messageContent || message.type, 'from:', sourceUserId, 'Bot:', bot.name);
+        
+        // 取得用戶資料
+        let displayName = sourceUserId;
+        let pictureUrl = null;
+        try {
+            const token = decryptSensitive(bot.channel_access_token);
+            const secret = decryptSensitive(bot.channel_secret);
+            
+            if (token && secret) {
+                const client = new Client({ channelAccessToken: token, channelSecret: secret });
+                const profile = await client.getProfile(sourceUserId);
+                displayName = profile.displayName || sourceUserId;
+                pictureUrl = profile.pictureUrl || null;
+            }
+        } catch (profileErr) {
+            console.warn('無法取得 LINE 用戶資料:', profileErr.message);
+        }
+        
+        // 寫入對話記錄
+        loadDatabase();
+        if (!database.chat_history) database.chat_history = [];
+        const convId = `line_bot_${bot.id}_${sourceUserId}`;
+        let conv = database.chat_history.find(c => c.id === convId);
+        
+        if (!conv) {
+            conv = { 
+                id: convId,
+                bot_id: bot.id,
+                userId: bot.user_id,
+                platform: 'line_bot', 
+                customerName: displayName,
+                customerPicture: pictureUrl,
+                customerLineId: sourceUserId,
+                messages: [], 
+                createdAt: new Date().toISOString(), 
+                updatedAt: new Date().toISOString() 
+            };
+            database.chat_history.push(conv);
+            
+            // 更新 Bot 的對話計數
+            bot.conversation_count = (bot.conversation_count || 0) + 1;
+        } else {
+            conv.customerName = displayName;
+            conv.customerPicture = pictureUrl;
+            conv.customerLineId = sourceUserId;
+            if (!conv.userId) conv.userId = bot.user_id;
+        }
+        
+        // 檢查重複訊息
+        const messageTimestamp = new Date().toISOString();
+        const recentMessages = conv.messages.slice(-10);
+        const duplicateMessage = recentMessages.find(msg => 
+            msg.role === 'user' && 
+            msg.content === messageContent && 
+            (new Date(messageTimestamp) - new Date(msg.timestamp)) < 30000
+        );
+        
+        if (duplicateMessage) {
+            console.log('⚠️ 檢測到重複訊息，跳過處理:', messageContent);
+            return;
+        }
+        
+        conv.messages.push({ role: 'user', content: messageContent, timestamp: messageTimestamp });
+        conv.updatedAt = new Date().toISOString();
+        
+        // 更新 Bot 的訊息計數
+        bot.message_count = (bot.message_count || 0) + 1;
+        
+        saveDatabase();
+        
+        // 檢查是否需要自動回覆
+        const autoReplyEnabled = conv.autoReplyEnabled !== false;
+        
+        if (autoReplyEnabled) {
+            try {
+                console.log('📝 開始生成 AI 回覆');
+                
+                // 使用對話歷史生成回覆
+                const { reply } = await generateAIReplyWithHistory(bot.user_id, conv.messages, messageContent || '');
+                console.log('✅ AI 回覆生成成功，長度:', reply.length);
+                
+                // 推送到 LINE
+                const token = decryptSensitive(bot.channel_access_token);
+                const secret = decryptSensitive(bot.channel_secret);
+                
+                if (token && secret) {
+                    const client = new Client({ channelAccessToken: token, channelSecret: secret });
+                    await client.pushMessage(sourceUserId, { type: 'text', text: reply });
+                    console.log('✅ LINE Bot 訊息回推成功');
+                    
+                    // 將 AI 回覆加入對話記錄
+                    conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                    conv.updatedAt = new Date().toISOString();
+                    saveDatabase();
+                }
+            } catch (e) {
+                console.warn('❌ 生成 AI 回覆失敗:', e.message);
+            }
+        } else {
+            console.log('📝 人工回覆模式：已記錄訊息，等待管理員回覆');
+        }
+        
+    } catch (error) {
+        console.error('處理 LINE Bot 訊息錯誤:', error);
+    }
+}
 
 // 處理 LINE 關注事件
 async function handleLineFollow(event, userId) {
