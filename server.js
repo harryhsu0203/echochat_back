@@ -3828,43 +3828,47 @@ async function handleLineMessage(event, userId) {
         saveDatabase();
 
         // 生成 AI 回覆並嘗試回推
+        let replyText = '';
+        let replySuccess = false;
         try {
-            console.log('📝 開始生成 AI 回覆，knowledgeOnly: true');
+            console.log('📝 開始生成 AI 回覆，userId:', userId, 'message:', message.text);
             const { reply } = await generateAIReplyForUser(userId, message.text || '', false);
             console.log('✅ AI 回覆生成成功，長度:', reply.length);
-            
-            // 回推 LINE 訊息（若有保存憑證）
+            replyText = reply;
+            replySuccess = true;
+        } catch (e) {
+            console.warn('❌ 生成 AI 回覆失敗:', e.message);
+            console.error('   Stack:', e.stack);
+            // 針對常見情況提供使用者可見的告知訊息
+            if (String(e?.message || '').includes('餘額不足')) {
+                replyText = '目前餘額不足，請至儀表板加值後再試。';
+            } else if (String(e?.message || '').includes('OPENAI_API_KEY')) {
+                replyText = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
+            } else {
+                replyText = '目前暫時無法回覆，請稍後再試。錯誤：' + e.message;
+            }
+        }
+        
+        // 無論成功或失敗，都嘗試回推並寫入
+        try {
             const creds = getLineCredentials(userId);
+            console.log('📡 取得憑證:', creds ? '有' : '無');
             if (creds && creds.channelAccessToken) {
+                console.log('   Token 長度:', creds.channelAccessToken.length);
                 const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
-                await client.pushMessage(sourceUserId, { type: 'text', text: reply });
+                await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
                 console.log('✅ LINE 訊息回推成功');
             } else {
                 console.warn('❌ 無 LINE 憑證，無法回推');
             }
-            conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
-            saveDatabase();
-        } catch (e) {
-            console.warn('生成/回推 AI 回覆失敗:', e.message);
-            console.error('完整錯誤:', e);
-            // 針對常見情況提供使用者可見的告知訊息
-            let fallback = '目前暫時無法回覆，請稍後再試。';
-            if (String(e?.message || '').includes('餘額不足')) {
-                fallback = '目前餘額不足，請至儀表板加值後再試。';
-            } else if (!process.env.OPENAI_API_KEY) {
-                fallback = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
-            }
-            try {
-                const creds = getLineCredentials(userId);
-                if (creds && creds.channelAccessToken) {
-                    const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
-                    await client.pushMessage(sourceUserId, { type: 'text', text: fallback });
-                    console.log('✅ 錯誤訊息回推成功');
-                }
-            } catch { console.warn('❌ 錯誤訊息回推失敗'); }
-            conv.messages.push({ role: 'assistant', content: fallback, timestamp: new Date().toISOString() });
-            saveDatabase();
+        } catch (pushErr) {
+            console.error('❌ LINE 回推失敗:', pushErr.message);
+            console.error('   詳細:', pushErr.response?.data || pushErr.stack);
         }
+        
+        conv.messages.push({ role: 'assistant', content: replyText, timestamp: new Date().toISOString() });
+        saveDatabase();
+        console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
         
     } catch (error) {
         console.error('處理 LINE 訊息錯誤:', error);
