@@ -18,6 +18,9 @@ const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
+
+// 防重複處理的記憶體快取
+const messageCache = new Map();
 const { parseStringPromise } = require('xml2js');
 const zlib = require('zlib');
 const { parse: parseCsv } = require('csv-parse/sync');
@@ -3851,8 +3854,23 @@ async function handleLineMessage(event, userId) {
     try {
         const message = event.message;
         const sourceUserId = event.source.userId;
+        const messageContent = message.text || '';
+        const messageId = message.id || `${sourceUserId}_${Date.now()}`;
         
-        console.log('💬 收到訊息:', message.text || message.type, 'from:', sourceUserId);
+        // 生成快取鍵
+        const cacheKey = `line_${userId}_${sourceUserId}_${messageId}_${messageContent}`;
+        
+        // 檢查是否已經處理過相同的訊息
+        if (messageCache.has(cacheKey)) {
+            console.log('⚠️ 訊息已處理過，跳過:', messageContent);
+            return;
+        }
+        
+        // 將訊息加入快取（5 分鐘後自動清除）
+        messageCache.set(cacheKey, true);
+        setTimeout(() => messageCache.delete(cacheKey), 5 * 60 * 1000);
+        
+        console.log('💬 收到訊息:', messageContent || message.type, 'from:', sourceUserId);
         
         // 取得用戶資料（名稱與照片）
         let displayName = sourceUserId;
@@ -3894,67 +3912,165 @@ async function handleLineMessage(event, userId) {
             conv.customerLineId = sourceUserId;
             if (!conv.userId) conv.userId = parseInt(userId);
         }
-        conv.messages.push({ role: 'user', content: message.text || '', timestamp: new Date().toISOString() });
+        
+        // 檢查是否已經回覆過相同的訊息（防重複）
+        const messageTimestamp = new Date().toISOString();
+        const recentMessages = conv.messages.slice(-10); // 檢查最近 10 條訊息
+        
+        // 如果最近有相同的用戶訊息，跳過處理
+        const duplicateMessage = recentMessages.find(msg => 
+            msg.role === 'user' && 
+            msg.content === messageContent && 
+            (new Date(messageTimestamp) - new Date(msg.timestamp)) < 30000 // 30 秒內
+        );
+        
+        if (duplicateMessage) {
+            console.log('⚠️ 檢測到重複訊息，跳過處理:', messageContent);
+            return;
+        }
+        
+        conv.messages.push({ role: 'user', content: messageContent, timestamp: messageTimestamp });
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
 
+        // 檢查是否需要自動回覆（暫時關閉以防止重複回覆）
+        const autoReplyEnabled = false; // 暫時關閉自動回覆，改為人工回覆模式
+        
         // 生成 AI 回覆並嘗試回推
         let replyText = '';
         let replySuccess = false;
-        try {
-            console.log('📝 開始生成 AI 回覆');
-            console.log('   userId:', userId, '(type:', typeof userId, ')');
-            console.log('   message:', message.text);
-            console.log('   sourceUserId:', sourceUserId);
-            
-            const userIdInt = parseInt(userId);
-            console.log('   userIdInt:', userIdInt);
-            
-            // 使用對話歷史生成回覆
-            const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, message.text || '');
-            console.log('✅ AI 回覆生成成功，長度:', reply.length);
-            replyText = reply;
-            replySuccess = true;
-        } catch (e) {
-            console.warn('❌ 生成 AI 回覆失敗:', e.message);
-            console.error('   完整錯誤:', e);
-            // 針對常見情況提供使用者可見的告知訊息
-            if (String(e?.message || '').includes('餘額不足')) {
-                replyText = '目前餘額不足，請至儀表板加值後再試。';
-            } else if (String(e?.message || '').includes('OPENAI_API_KEY')) {
-                replyText = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
-            } else if (String(e?.message || '').includes('使用者不存在')) {
-                replyText = '系統設定錯誤，請聯繫管理員。';
-            } else {
-                replyText = '目前暫時無法回覆，請稍後再試。';
+        
+        if (autoReplyEnabled) {
+            try {
+                console.log('📝 開始生成 AI 回覆');
+                console.log('   userId:', userId, '(type:', typeof userId, ')');
+                console.log('   message:', message.text);
+                console.log('   sourceUserId:', sourceUserId);
+                
+                const userIdInt = parseInt(userId);
+                console.log('   userIdInt:', userIdInt);
+                
+                // 使用對話歷史生成回覆
+                const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, message.text || '');
+                console.log('✅ AI 回覆生成成功，長度:', reply.length);
+                replyText = reply;
+                replySuccess = true;
+            } catch (e) {
+                console.warn('❌ 生成 AI 回覆失敗:', e.message);
+                console.error('   完整錯誤:', e);
+                // 針對常見情況提供使用者可見的告知訊息
+                if (String(e?.message || '').includes('餘額不足')) {
+                    replyText = '目前餘額不足，請至儀表板加值後再試。';
+                } else if (String(e?.message || '').includes('OPENAI_API_KEY')) {
+                    replyText = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
+                } else if (String(e?.message || '').includes('使用者不存在')) {
+                    replyText = '系統設定錯誤，請聯繫管理員。';
+                } else {
+                    replyText = '目前暫時無法回覆，請稍後再試。';
+                }
             }
+        } else {
+            // 人工回覆模式，只記錄訊息，不自動回覆
+            replyText = '';
+            console.log('📝 人工回覆模式：已記錄訊息，等待管理員回覆');
         }
         
-        // 無論成功或失敗，都嘗試回推並寫入
-        try {
-            const creds = getLineCredentials(userId);
-            console.log('📡 取得憑證:', creds ? '有' : '無');
-            if (creds && creds.channelAccessToken) {
-                console.log('   Token 長度:', creds.channelAccessToken.length);
-                const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
-                await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
-                console.log('✅ LINE 訊息回推成功');
-            } else {
-                console.warn('❌ 無 LINE 憑證，無法回推');
+        // 只有在有回覆內容時才回推
+        if (replyText) {
+            try {
+                const creds = getLineCredentials(userId);
+                console.log('📡 取得憑證:', creds ? '有' : '無');
+                if (creds && creds.channelAccessToken) {
+                    console.log('   Token 長度:', creds.channelAccessToken.length);
+                    const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+                    await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
+                    console.log('✅ LINE 訊息回推成功');
+                    
+                    // 將 AI 回覆加入對話記錄
+                    conv.messages.push({ role: 'assistant', content: replyText, timestamp: new Date().toISOString() });
+                    conv.updatedAt = new Date().toISOString();
+                    saveDatabase();
+                    console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
+                } else {
+                    console.warn('❌ 無 LINE 憑證，無法回推');
+                }
+            } catch (pushErr) {
+                console.error('❌ LINE 回推失敗:', pushErr.message);
+                console.error('   詳細:', pushErr.response?.data || pushErr.stack);
             }
-        } catch (pushErr) {
-            console.error('❌ LINE 回推失敗:', pushErr.message);
-            console.error('   詳細:', pushErr.response?.data || pushErr.stack);
+        } else {
+            console.log('📝 無回覆內容，不進行回推');
         }
-        
-        conv.messages.push({ role: 'assistant', content: replyText, timestamp: new Date().toISOString() });
-        saveDatabase();
-        console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
         
     } catch (error) {
         console.error('處理 LINE 訊息錯誤:', error);
     }
 }
+
+// 人工回覆 LINE 訊息 API
+app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
+    try {
+        const { conversationId, message } = req.body;
+        
+        if (!conversationId || !message) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供對話ID和回覆訊息'
+            });
+        }
+        
+        loadDatabase();
+        const conv = database.chat_history.find(c => c.id === conversationId);
+        if (!conv) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到對話記錄'
+            });
+        }
+        
+        // 將人工回覆加入對話記錄
+        conv.messages.push({ 
+            role: 'assistant', 
+            content: message, 
+            timestamp: new Date().toISOString(),
+            isManualReply: true
+        });
+        conv.updatedAt = new Date().toISOString();
+        saveDatabase();
+        
+        // 如果是 LINE 對話，推送到 LINE
+        if (conv.platform === 'line' && conv.customerLineId) {
+            try {
+                const creds = getLineCredentials(conv.userId);
+                if (creds && creds.channelAccessToken) {
+                    const client = new Client({ 
+                        channelAccessToken: creds.channelAccessToken, 
+                        channelSecret: creds.channelSecret 
+                    });
+                    await client.pushMessage(conv.customerLineId, { 
+                        type: 'text', 
+                        text: message 
+                    });
+                    console.log('✅ 人工回覆已推送到 LINE');
+                }
+            } catch (pushErr) {
+                console.error('❌ 推送人工回覆失敗:', pushErr.message);
+            }
+        }
+        
+        res.json({
+            success: true,
+            message: '人工回覆已發送'
+        });
+        
+    } catch (error) {
+        console.error('人工回覆 LINE 訊息錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '發送人工回覆失敗'
+        });
+    }
+});
 
 // 處理 LINE 關注事件
 async function handleLineFollow(event, userId) {
