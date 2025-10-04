@@ -48,7 +48,8 @@ const PLAN_TOKEN_MONTHLY = {
 };
 
 function getUserById(userId) {
-    return (database.staff_accounts || []).find(u => u.id === userId);
+    loadDatabase();
+    return (database.staff_accounts || []).find(u => u.id === parseInt(userId) || u.id === userId);
 }
 
 function getPlanAllowance(plan, user) {
@@ -429,8 +430,9 @@ function getLineCredentials(userId) {
 async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
     if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY 未設置');
     loadDatabase();
-    const aiConfig = getUserAIConfig(userId);
     const user = getUserById(userId);
+    if (!user) throw new Error('使用者不存在');
+    const aiConfig = getUserAIConfig(userId);
     ensureUserTokenFields(user);
     maybeResetCycle(user);
 
