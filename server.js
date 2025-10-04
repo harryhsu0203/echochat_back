@@ -3961,8 +3961,8 @@ async function handleLineMessage(event, userId) {
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
 
-        // 檢查是否需要自動回覆（完全關閉以防止重複回覆）
-        const autoReplyEnabled = false; // 完全關閉自動回覆，改為人工回覆模式
+        // 檢查是否需要自動回覆（從對話設定中讀取）
+        const autoReplyEnabled = conv.autoReplyEnabled !== false; // 預設為開啟，除非明確關閉
         
         // 生成 AI 回覆並嘗試回推
         let replyText = '';
@@ -4096,6 +4096,49 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         res.status(500).json({
             success: false,
             error: '發送人工回覆失敗'
+        });
+    }
+});
+
+// 切換對話自動回覆設定 API
+app.post('/api/conversation/toggle-auto-reply', authenticateJWT, async (req, res) => {
+    try {
+        const { conversationId, autoReplyEnabled } = req.body;
+        
+        if (!conversationId || typeof autoReplyEnabled !== 'boolean') {
+            return res.status(400).json({
+                success: false,
+                error: '請提供對話ID和自動回覆設定'
+            });
+        }
+        
+        loadDatabase();
+        const conv = database.chat_history.find(c => c.id === conversationId);
+        if (!conv) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到對話記錄'
+            });
+        }
+        
+        // 更新自動回覆設定
+        conv.autoReplyEnabled = autoReplyEnabled;
+        conv.updatedAt = new Date().toISOString();
+        saveDatabase();
+        
+        console.log(`✅ 對話 ${conversationId} 自動回覆設定已更新: ${autoReplyEnabled}`);
+        
+        res.json({
+            success: true,
+            message: autoReplyEnabled ? '已開啟自動回覆' : '已關閉自動回覆',
+            autoReplyEnabled: autoReplyEnabled
+        });
+        
+    } catch (error) {
+        console.error('切換自動回覆設定錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '切換設定失敗'
         });
     }
 });
