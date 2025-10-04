@@ -3833,21 +3833,30 @@ async function handleLineMessage(event, userId) {
         let replyText = '';
         let replySuccess = false;
         try {
-            console.log('📝 開始生成 AI 回覆，userId:', userId, 'message:', message.text);
-            const { reply } = await generateAIReplyForUser(userId, message.text || '', false);
+            console.log('📝 開始生成 AI 回覆');
+            console.log('   userId:', userId, '(type:', typeof userId, ')');
+            console.log('   message:', message.text);
+            console.log('   sourceUserId:', sourceUserId);
+            
+            const userIdInt = parseInt(userId);
+            console.log('   userIdInt:', userIdInt);
+            
+            const { reply } = await generateAIReplyForUser(userIdInt, message.text || '', false);
             console.log('✅ AI 回覆生成成功，長度:', reply.length);
             replyText = reply;
             replySuccess = true;
         } catch (e) {
             console.warn('❌ 生成 AI 回覆失敗:', e.message);
-            console.error('   Stack:', e.stack);
+            console.error('   完整錯誤:', e);
             // 針對常見情況提供使用者可見的告知訊息
             if (String(e?.message || '').includes('餘額不足')) {
                 replyText = '目前餘額不足，請至儀表板加值後再試。';
             } else if (String(e?.message || '').includes('OPENAI_API_KEY')) {
                 replyText = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
+            } else if (String(e?.message || '').includes('使用者不存在')) {
+                replyText = '系統設定錯誤，請聯繫管理員。';
             } else {
-                replyText = '目前暫時無法回覆，請稍後再試。錯誤：' + e.message;
+                replyText = '目前暫時無法回覆，請稍後再試。';
             }
         }
         
