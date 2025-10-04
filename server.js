@@ -3636,10 +3636,30 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
         const events = req.body.events || [];
         
         console.log(`📨 收到 LINE Webhook: 用戶 ${userId}, 事件數量: ${events.length}`);
+        console.log('📋 Webhook 詳細資訊:', {
+            userId,
+            eventCount: events.length,
+            timestamp: new Date().toISOString(),
+            userAgent: req.headers['user-agent'],
+            ip: req.ip
+        });
         
         // 處理每個事件
         for (const event of events) {
             console.log('📝 LINE 事件:', event.type);
+            
+            // 檢查事件是否已經處理過（使用事件 ID 防重複）
+            const eventId = event.replyToken || event.timestamp || `${event.type}_${Date.now()}`;
+            const eventCacheKey = `line_event_${userId}_${eventId}`;
+            
+            if (messageCache.has(eventCacheKey)) {
+                console.log('⚠️ 事件已處理過，跳過:', event.type);
+                continue;
+            }
+            
+            // 將事件加入快取（10 分鐘後自動清除）
+            messageCache.set(eventCacheKey, true);
+            setTimeout(() => messageCache.delete(eventCacheKey), 10 * 60 * 1000);
             
             switch (event.type) {
                 case 'message':
@@ -3871,6 +3891,14 @@ async function handleLineMessage(event, userId) {
         setTimeout(() => messageCache.delete(cacheKey), 5 * 60 * 1000);
         
         console.log('💬 收到訊息:', messageContent || message.type, 'from:', sourceUserId);
+        console.log('📋 訊息詳細資訊:', {
+            messageId: messageId,
+            messageContent: messageContent,
+            sourceUserId: sourceUserId,
+            userId: userId,
+            timestamp: new Date().toISOString(),
+            cacheKey: cacheKey
+        });
         
         // 取得用戶資料（名稱與照片）
         let displayName = sourceUserId;
@@ -3933,8 +3961,8 @@ async function handleLineMessage(event, userId) {
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
 
-        // 檢查是否需要自動回覆（暫時關閉以防止重複回覆）
-        const autoReplyEnabled = false; // 暫時關閉自動回覆，改為人工回覆模式
+        // 檢查是否需要自動回覆（完全關閉以防止重複回覆）
+        const autoReplyEnabled = false; // 完全關閉自動回覆，改為人工回覆模式
         
         // 生成 AI 回覆並嘗試回推
         let replyText = '';
