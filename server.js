@@ -590,7 +590,7 @@ let database = {
     user_states: [],
     chat_history: [],
     channels: [],
-    ai_assistant_config: [],
+    ai_assistant_configs: [],
     email_verifications: [], // 儲存電子郵件驗證碼
     password_reset_requests: [], // 儲存密碼重設請求
     line_api_settings: [] // 每位使用者的 LINE Token 設定
@@ -611,7 +611,7 @@ const loadDatabase = () => {
                 user_states: loadedData.user_states || [],
                 chat_history: loadedData.chat_history || [],
                 channels: loadedData.channels || [],
-                ai_assistant_config: loadedData.ai_assistant_config || [],
+                ai_assistant_configs: loadedData.ai_assistant_configs || [],
                 email_verifications: loadedData.email_verifications || [],
                 password_reset_requests: loadedData.password_reset_requests || [],
                 line_api_settings: loadedData.line_api_settings || []
