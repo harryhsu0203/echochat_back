@@ -30,7 +30,7 @@ const XLSX = require('xlsx');
 const app = express();
 app.disable('x-powered-by');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
-const SESSION_TIMEOUT_MINUTES = Math.max(parseInt(process.env.SESSION_TIMEOUT_MINUTES || '5', 10) || 5, 1);
+const SESSION_TIMEOUT_MINUTES = Math.max(parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15, 1);
 const JWT_EXPIRES_IN = `${SESSION_TIMEOUT_MINUTES}m`;
 // 綠界金流設定
 const ECPAY_MODE = process.env.ECPAY_MODE || 'Stage'; // 'Stage' or 'Prod'
