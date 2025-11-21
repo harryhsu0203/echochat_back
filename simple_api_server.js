@@ -11,6 +11,8 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'echochat-secret-key-2025';
+const SESSION_TIMEOUT_MINUTES = Math.max(parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15, 1);
+const JWT_EXPIRES_IN = `${SESSION_TIMEOUT_MINUTES}m`;
 
 // 資料檔案路徑
 const DATA_FILE = path.join(__dirname, 'data', 'users.json');
@@ -579,7 +581,7 @@ app.post('/api/register', async (req, res) => {
                 role: newUser.role 
             },
             JWT_SECRET,
-            { expiresIn: '24h' }
+            { expiresIn: JWT_EXPIRES_IN }
         );
         
         res.json({
@@ -639,7 +641,7 @@ app.post('/api/login', async (req, res) => {
                 role: user.role 
             },
             JWT_SECRET,
-            { expiresIn: '24h' }
+            { expiresIn: JWT_EXPIRES_IN }
         );
         
         res.json({
@@ -704,7 +706,7 @@ app.post('/api/google-login', async (req, res) => {
                 role: user.role 
             },
             JWT_SECRET,
-            { expiresIn: '24h' }
+            { expiresIn: JWT_EXPIRES_IN }
         );
         
         res.json({

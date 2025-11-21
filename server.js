@@ -30,6 +30,8 @@ const XLSX = require('xlsx');
 const app = express();
 app.disable('x-powered-by');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const SESSION_TIMEOUT_MINUTES = Math.max(parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15, 1);
+const JWT_EXPIRES_IN = `${SESSION_TIMEOUT_MINUTES}m`;
 // 綠界金流設定
 const ECPAY_MODE = process.env.ECPAY_MODE || 'Stage'; // 'Stage' or 'Prod'
 const ECPAY_MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || '';
@@ -297,7 +299,11 @@ app.post('/api/auth/google', async (req, res) => {
             database.staff_accounts.push(user);
             saveDatabase();
         }
-        const token = jwt.sign({ id: user.id, username: user.username, name: user.name, role: user.role }, JWT_SECRET, { expiresIn:'7d' });
+        const token = jwt.sign(
+            { id: user.id, username: user.username, name: user.name, role: user.role },
+            JWT_SECRET,
+            { expiresIn: JWT_EXPIRES_IN }
+        );
         return res.json({ success:true, token, user: { id:user.id, name:user.name, email:user.email, role:user.role, plan:user.plan } });
     } catch (e) {
         console.error('Google 登入失敗', e.message);
@@ -647,11 +653,23 @@ const checkRole = (roles) => {
 
 // 簡單的 JSON 檔案儲存系統
 const dataDir = process.env.NODE_ENV === 'production' ? process.env.DATA_DIR || './data' : './data';
+const defaultDataDir = path.join(__dirname, 'data');
 const dataFile = path.join(dataDir, 'database.json');
+const defaultDataFile = path.join(defaultDataDir, 'database.json');
 
 // 確保資料目錄存在
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
+}
+
+// 若指定 DATA_DIR 但資料檔不存在，且專案內有備份，則自動複製一次
+if (dataDir !== defaultDataDir && !fs.existsSync(dataFile) && fs.existsSync(defaultDataFile)) {
+    try {
+        fs.copyFileSync(defaultDataFile, dataFile);
+        console.log('📁 已將 data/database.json 自動複製到 DATA_DIR');
+    } catch (error) {
+        console.error('⚠️ 無法自動複製資料庫檔案:', error.message);
+    }
 }
 
 // 初始化資料結構
@@ -856,7 +874,7 @@ app.post('/api/login', async (req, res) => {
                     plan: staff.plan || 'free'
                 },
                 JWT_SECRET,
-                { expiresIn: '24h' }
+                { expiresIn: JWT_EXPIRES_IN }
             );
 
             console.log('✅ 登入成功，生成 Token:', {
@@ -3479,7 +3497,8 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
             data: {
                 channelAccessToken: lineAPISettings[userId].channelAccessToken,
                 channelSecret: lineAPISettings[userId].channelSecret,
-                webhookUrl: lineAPISettings[userId].webhookUrl
+                webhookUrl: lineAPISettings[userId].webhookUrl,
+                isActive: record?.isActive !== false // 預設為啟用
             }
         });
     } catch (error) {
@@ -3506,17 +3525,19 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
 
         console.log('📝 準備儲存 LINE Token，userId:', userId);
         console.log('   Token 長度:', channelAccessToken.length, 'Secret 長度:', channelSecret.length);
-        
+
         loadDatabase();
         if (!database.line_api_settings) database.line_api_settings = [];
         const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
         const encryptedToken = encryptSensitive(channelAccessToken);
         const encryptedSecret = encryptSensitive(channelSecret);
+        const existingRecord = idx >= 0 ? database.line_api_settings[idx] : null;
         const record = {
             user_id: userId,
             channel_access_token: encryptedToken || channelAccessToken,
             channel_secret: encryptedSecret || channelSecret,
             webhook_url: webhookUrl || `https://${req.get('host')}/api/webhook/line/${userId}`,
+            isActive: existingRecord?.isActive !== false, // 保留現有狀態，新記錄預設為啟用
             updated_at: new Date().toISOString()
         };
         if (idx >= 0) {
@@ -3544,7 +3565,8 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             data: {
                 channelAccessToken: 'Configured',
                 channelSecret: 'Configured',
-                webhookUrl: record.webhook_url
+                webhookUrl: record.webhook_url,
+                isActive: record.isActive
             }
         });
     } catch (error) {
@@ -3552,6 +3574,52 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
         res.status(500).json({
                 success: false,
             error: '保存 LINE API 設定失敗'
+        });
+    }
+});
+
+// 切換 LINE API 設定啟用狀態
+app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const { isActive } = req.body;
+        
+        if (typeof isActive !== 'boolean') {
+            return res.status(400).json({
+                success: false,
+                error: '請提供有效的 isActive 值（true/false）'
+            });
+        }
+
+        loadDatabase();
+        if (!database.line_api_settings) database.line_api_settings = [];
+        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        
+        if (idx < 0) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到 LINE API 設定，請先儲存設定'
+            });
+        }
+
+        database.line_api_settings[idx].isActive = isActive;
+        database.line_api_settings[idx].updated_at = new Date().toISOString();
+        saveDatabase();
+
+        console.log(`✅ LINE API 設定啟用狀態已更新: ${isActive ? '啟用' : '停用'}`);
+
+        res.json({
+            success: true,
+            message: isActive ? 'LINE 頻道已啟用' : 'LINE 頻道已停用',
+            data: {
+                isActive: isActive
+            }
+        });
+    } catch (error) {
+        console.error('切換 LINE API 設定啟用狀態錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '切換啟用狀態失敗'
         });
     }
 });
@@ -3645,6 +3713,18 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
             userAgent: req.headers['user-agent'],
             ip: req.ip
         });
+        
+        // 檢查頻道是否啟用
+        loadDatabase();
+        const lineSetting = (database.line_api_settings || []).find(r => r.user_id == userId);
+        if (lineSetting && lineSetting.isActive === false) {
+            console.log(`⚠️ LINE 頻道已停用，跳過處理: 用戶 ${userId}`);
+            return res.json({ 
+                success: true, 
+                message: '頻道已停用，事件已忽略',
+                ignored: true 
+            });
+        }
         
         // 處理每個事件
         for (const event of events) {
@@ -3965,7 +4045,7 @@ async function handleLineMessage(event, userId) {
 
         // 檢查是否需要自動回覆（從對話設定中讀取）
         const autoReplyEnabled = conv.autoReplyEnabled !== false; // 預設為開啟，除非明確關閉
-        
+
         // 生成 AI 回覆並嘗試回推
         let replyText = '';
         let replySuccess = false;
@@ -4008,11 +4088,11 @@ async function handleLineMessage(event, userId) {
         // 只有在有回覆內容時才回推
         if (replyText) {
             try {
-                const creds = getLineCredentials(userId);
+            const creds = getLineCredentials(userId);
                 console.log('📡 取得憑證:', creds ? '有' : '無');
-                if (creds && creds.channelAccessToken) {
+            if (creds && creds.channelAccessToken) {
                     console.log('   Token 長度:', creds.channelAccessToken.length);
-                    const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+                const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
                     await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
                     console.log('✅ LINE 訊息回推成功');
                     
@@ -4499,11 +4579,11 @@ async function handleLineBotMessage(event, bot) {
                     console.log('✅ LINE Bot 訊息回推成功');
                     
                     // 將 AI 回覆加入對話記錄
-                    conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+            conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
                     conv.updatedAt = new Date().toISOString();
-                    saveDatabase();
+            saveDatabase();
                 }
-            } catch (e) {
+        } catch (e) {
                 console.warn('❌ 生成 AI 回覆失敗:', e.message);
             }
         } else {
