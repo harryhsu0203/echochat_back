@@ -415,6 +415,54 @@ function findUserChannel(userId, platform) {
     return { ...ch, apiKey, secret };
 }
 
+function ensureChannelsContainer() {
+    if (!Array.isArray(database.channels)) {
+        database.channels = [];
+    }
+}
+
+function normalizeUserId(userId) {
+    if (typeof userId === 'number') return userId;
+    const parsed = parseInt(userId, 10);
+    return Number.isNaN(parsed) ? userId : parsed;
+}
+
+function upsertDefaultLineChannel(userId, options = {}) {
+    ensureChannelsContainer();
+    const ownerId = normalizeUserId(userId);
+    const channelKey = `${ownerId}_line_default`;
+    let channel = database.channels.find(c => c.id === channelKey);
+    if (!channel) {
+        channel = {
+            id: channelKey,
+            userId: ownerId,
+            name: 'LINE 客服',
+            platform: 'line',
+            createdAt: new Date().toISOString(),
+            message_count: 0,
+            conversation_count: 0
+        };
+        database.channels.push(channel);
+    }
+    if (options.name) channel.name = options.name;
+    if (options.webhookUrl !== undefined) channel.webhookUrl = options.webhookUrl;
+    if (options.isActive !== undefined) channel.isActive = options.isActive;
+    if (options.hasCredentials !== undefined) channel.hasCredentials = options.hasCredentials;
+    channel.updatedAt = new Date().toISOString();
+}
+
+function markLineChannelUnconfigured(userId) {
+    ensureChannelsContainer();
+    const ownerId = normalizeUserId(userId);
+    const channelKey = `${ownerId}_line_default`;
+    const channel = database.channels.find(c => c.id === channelKey);
+    if (!channel) return;
+    channel.hasCredentials = false;
+    channel.isActive = false;
+    channel.webhookUrl = '';
+    channel.updatedAt = new Date().toISOString();
+}
+
 // 取得 LINE 憑證（優先從記憶體快取，提升效能並避免解密問題）
 function getLineCredentials(userId) {
     // 優先從記憶體快取取得（保存時已放入明文）
@@ -3558,6 +3606,12 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             database.line_api_settings.push(record);
             console.log('✅ 新增記錄');
         }
+        upsertDefaultLineChannel(userId, {
+            isActive: record.isActive,
+            webhookUrl: record.webhook_url,
+            hasCredentials: true,
+            name: 'LINE 客服'
+        });
         saveDatabase();
 
         // 更新記憶體快取（用於回推時快速取得）
@@ -3607,6 +3661,7 @@ app.delete('/api/line-api/settings', authenticateJWT, async (req, res) => {
         }
         
         const removed = database.line_api_settings.splice(idx, 1)[0];
+        markLineChannelUnconfigured(userId);
         saveDatabase();
         if (lineAPISettings[userId]) {
             delete lineAPISettings[userId];
@@ -3658,6 +3713,11 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
 
         database.line_api_settings[idx].isActive = isActive;
         database.line_api_settings[idx].updated_at = new Date().toISOString();
+        upsertDefaultLineChannel(userId, {
+            isActive,
+            webhookUrl: database.line_api_settings[idx].webhook_url,
+            hasCredentials: true
+        });
         saveDatabase();
 
         console.log(`✅ LINE API 設定啟用狀態已更新: ${isActive ? '啟用' : '停用'}`);
