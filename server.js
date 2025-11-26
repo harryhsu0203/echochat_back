@@ -3491,21 +3491,24 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
             ? (decryptSensitive(record?.channel_secret) || record?.channel_secret || '')
             : '';
 
-        // 更新快取（不回傳明文至前端，僅標示狀態）
-        lineAPISettings[userId] = {
-            channelAccessToken: decryptedToken ? 'Configured' : '',
-            channelSecret: decryptedSecret ? 'Configured' : '',
-            webhookUrl: hasRecord ? (record?.webhook_url || '') : ''
-        };
+        if (hasRecord) {
+            lineAPISettings[userId] = {
+                channelAccessToken: decryptedToken,
+                channelSecret: decryptedSecret,
+                webhookUrl: record?.webhook_url || ''
+            };
+        } else if (lineAPISettings[userId]) {
+            delete lineAPISettings[userId];
+        }
 
         res.json({
             success: true,
             data: {
                 hasSettings: hasRecord,
                 needsSetup: !hasRecord,
-                channelAccessToken: lineAPISettings[userId].channelAccessToken,
-                channelSecret: lineAPISettings[userId].channelSecret,
-                webhookUrl: lineAPISettings[userId].webhookUrl,
+                channelAccessToken: decryptedToken ? 'Configured' : '',
+                channelSecret: decryptedSecret ? 'Configured' : '',
+                webhookUrl: record?.webhook_url || '',
                 isActive: hasRecord ? record?.isActive !== false : false
             }
         });
@@ -3588,6 +3591,47 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
     }
 });
 
+// 刪除 LINE API 設定
+app.delete('/api/line-api/settings', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        loadDatabase();
+        if (!database.line_api_settings) database.line_api_settings = [];
+        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        
+        if (idx < 0) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到 LINE API 設定'
+            });
+        }
+        
+        const removed = database.line_api_settings.splice(idx, 1)[0];
+        saveDatabase();
+        if (lineAPISettings[userId]) {
+            delete lineAPISettings[userId];
+        }
+        
+        console.log(`🗑️ 用戶 ${userId} 已刪除 LINE Token 設定 (${removed?.webhook_url || '無 Webhook'})`);
+        
+        res.json({
+            success: true,
+            message: 'LINE 憑證已移除',
+            data: {
+                hasSettings: false,
+                needsSetup: true,
+                isActive: false
+            }
+        });
+    } catch (error) {
+        console.error('刪除 LINE API 設定錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '刪除 LINE API 設定失敗'
+        });
+    }
+});
+
 // 切換 LINE API 設定啟用狀態
 app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
     try {
@@ -3630,6 +3674,55 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
         res.status(500).json({
             success: false,
             error: '切換啟用狀態失敗'
+        });
+    }
+});
+
+// 測試 LINE API 串接狀態
+app.post('/api/line-api/settings/test', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        loadDatabase();
+        const record = (database.line_api_settings || []).find(r => r.user_id === userId);
+        if (!record) {
+            return res.status(404).json({
+                success: false,
+                error: '尚未綁定 LINE 憑證'
+            });
+        }
+        
+        const token = decryptSensitive(record.channel_access_token) || record.channel_access_token || '';
+        const secret = decryptSensitive(record.channel_secret) || record.channel_secret || '';
+        
+        if (!token || !secret) {
+            return res.status(400).json({
+                success: false,
+                error: 'LINE 憑證不完整，請重新綁定'
+            });
+        }
+        
+        const botInfoUrl = 'https://api.line.me/v2/bot/info';
+        const headers = { Authorization: `Bearer ${token}` };
+        const botInfoResponse = await axios.get(botInfoUrl, { headers });
+        
+        const webhookUrl = record.webhook_url || `https://${req.get('host')}/api/webhook/line/${userId}`;
+        
+        res.json({
+            success: true,
+            message: '成功與 LINE Bot 連線，憑證可用',
+            data: {
+                botInfo: botInfoResponse.data || null,
+                webhookUrl: webhookUrl,
+                isActive: record.isActive !== false
+            }
+        });
+    } catch (error) {
+        console.error('測試 LINE API 串接錯誤:', error?.response?.data || error.message);
+        const status = error.response?.status || 500;
+        res.status(status === 200 ? 500 : status).json({
+            success: false,
+            error: 'LINE 串接驗證失敗',
+            detail: error.response?.data?.message || error.message || '未知錯誤'
         });
     }
 });
