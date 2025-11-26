@@ -3483,22 +3483,30 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
         const userId = req.staff.id;
         loadDatabase();
         const record = (database.line_api_settings || []).find(r => r.user_id === userId);
-        const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '';
-        const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret || '';
+        const hasRecord = !!record;
+        const decryptedToken = hasRecord
+            ? (decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '')
+            : '';
+        const decryptedSecret = hasRecord
+            ? (decryptSensitive(record?.channel_secret) || record?.channel_secret || '')
+            : '';
+
         // 更新快取（不回傳明文至前端，僅標示狀態）
         lineAPISettings[userId] = {
             channelAccessToken: decryptedToken ? 'Configured' : '',
             channelSecret: decryptedSecret ? 'Configured' : '',
-            webhookUrl: record?.webhook_url || ''
+            webhookUrl: hasRecord ? (record?.webhook_url || '') : ''
         };
 
         res.json({
             success: true,
             data: {
+                hasSettings: hasRecord,
+                needsSetup: !hasRecord,
                 channelAccessToken: lineAPISettings[userId].channelAccessToken,
                 channelSecret: lineAPISettings[userId].channelSecret,
                 webhookUrl: lineAPISettings[userId].webhookUrl,
-                isActive: record?.isActive !== false // 預設為啟用
+                isActive: hasRecord ? record?.isActive !== false : false
             }
         });
     } catch (error) {
@@ -3563,6 +3571,8 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             success: true,
             message: 'LINE API 設定保存成功',
             data: {
+                hasSettings: true,
+                needsSetup: false,
                 channelAccessToken: 'Configured',
                 channelSecret: 'Configured',
                 webhookUrl: record.webhook_url,
