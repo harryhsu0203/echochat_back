@@ -3701,19 +3701,81 @@ app.post('/api/line-api/settings/test', authenticateJWT, async (req, res) => {
             });
         }
         
-        const botInfoUrl = 'https://api.line.me/v2/bot/info';
         const headers = { Authorization: `Bearer ${token}` };
-        const botInfoResponse = await axios.get(botInfoUrl, { headers });
+        const expectedWebhookUrl = record.webhook_url || `https://${req.get('host')}/api/webhook/line/${userId}`;
+        const issues = [];
+        const warnings = [];
         
-        const webhookUrl = record.webhook_url || `https://${req.get('host')}/api/webhook/line/${userId}`;
+        if (record.isActive === false) {
+            issues.push('LINE 頻道目前為停用狀態，請在綁定頁面開啟「頻道狀態」。');
+        }
+        
+        let botInfo = null;
+        try {
+            const botInfoResponse = await axios.get('https://api.line.me/v2/bot/info', { headers });
+            botInfo = botInfoResponse.data || null;
+        } catch (error) {
+            throw new Error(error?.response?.data?.message || '無法取得 LINE Bot 資訊，請確認 Token 是否正確。');
+        }
+        
+        let webhookEndpointInfo = null;
+        try {
+            const endpointResp = await axios.get('https://api.line.me/v2/bot/channel/webhook/endpoint', { headers });
+            webhookEndpointInfo = endpointResp.data || null;
+        } catch (error) {
+            warnings.push('無法讀取 LINE Developers 上的 Webhook 設定，請在平台確認是否已填入。');
+        }
+        
+        const endpointMatches = webhookEndpointInfo?.endpoint
+            ? webhookEndpointInfo.endpoint === expectedWebhookUrl
+            : false;
+        
+        if (!webhookEndpointInfo?.endpoint) {
+            issues.push('LINE Developers 尚未設定 Webhook URL，請在 Messaging API 頁面填入 EchoChat 提供的網址。');
+        } else if (!endpointMatches) {
+            issues.push(`LINE Developers 上的 Webhook (${webhookEndpointInfo.endpoint}) 與 EchoChat 預期的 URL (${expectedWebhookUrl}) 不一致。`);
+        }
+        
+        if (webhookEndpointInfo && webhookEndpointInfo.active === false) {
+            issues.push('LINE Developers 的 Webhook 尚未啟用，請在 Messaging API 頁面將「Use webhook」開啟。');
+        }
+        
+        let webhookTest = null;
+        try {
+            const payload = endpointMatches ? {} : { endpoint: expectedWebhookUrl };
+            const testResp = await axios.post(
+                'https://api.line.me/v2/bot/channel/webhook/test',
+                payload,
+                { headers }
+            );
+            webhookTest = testResp.data || null;
+            if (!webhookTest || webhookTest.status !== 'success') {
+                issues.push('LINE Webhook 測試未通過，請在 LINE Developers 的「Test webhook」功能中查看詳細原因。');
+            }
+        } catch (error) {
+            const detail = error?.response?.data?.message || error.message || '未知錯誤';
+            webhookTest = {
+                status: 'failed',
+                detail
+            };
+            issues.push(`LINE Webhook 測試失敗：${detail}`);
+        }
+        
+        const overallStatus = (issues.length === 0 && webhookTest?.status === 'success') ? 'passed' : 'failed';
         
         res.json({
             success: true,
-            message: '成功與 LINE Bot 連線，憑證可用',
             data: {
-                botInfo: botInfoResponse.data || null,
-                webhookUrl: webhookUrl,
-                isActive: record.isActive !== false
+                overallStatus,
+                botInfo,
+                isActive: record.isActive !== false,
+                webhookUrl: expectedWebhookUrl,
+                webhookEndpoint: webhookEndpointInfo?.endpoint || null,
+                webhookActive: webhookEndpointInfo?.active ?? false,
+                endpointMatches,
+                webhookTest,
+                issues,
+                warnings
             }
         });
     } catch (error) {
