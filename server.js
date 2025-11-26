@@ -806,39 +806,15 @@ const connectDatabase = async () => {
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
-            try {
-                // 創建管理員帳號
-                const adminPassword = 'gele1227';
-                const hash = await new Promise((resolve, reject) => {
-                    bcrypt.hash(adminPassword, 10, (err, hash) => {
-                        if (err) reject(err);
-                        else resolve(hash);
-                    });
-                });
-                
-                const adminAccount = {
-                    id: database.staff_accounts.length + 1,
-                    username: 'sunnyharry1',
-                    password: hash,
-                    name: '系統管理員',
-                    role: 'admin',
-                    email: '',
-                    created_at: new Date().toISOString(),
-                    plan: 'enterprise'
-                };
-                
-                database.staff_accounts.push(adminAccount);
-            saveDatabase();
-                
-                console.log('✅ 管理員帳號已創建');
-                console.log('📧 帳號: sunnyharry1');
-                console.log('🔑 密碼: gele1227');
-            } catch (writeError) {
-                console.log('⚠️ 無法創建管理員帳號（可能是只讀文件系統）:', writeError.message);
-                console.log('ℹ️ 服務器將繼續運行，但管理員功能可能受限');
-            }
+            console.warn('⚠️ 找不到預期的 super_admin 帳號 sunnyharry1，請執行 scripts/add-user.js 以建立安全密碼的帳號。');
         } else {
-            console.log('ℹ️ 管理員帳號已存在');
+            if (adminExists.role !== 'super_admin') {
+                adminExists.role = 'super_admin';
+                saveDatabase();
+                console.log('🔁 已自動將 sunnyharry1 升級為 super_admin。');
+            } else {
+                console.log('ℹ️ 管理員帳號已存在並具有 super_admin 權限');
+            }
         }
         
         console.log('✅ JSON 資料庫初始化完成');
@@ -2248,60 +2224,60 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     }
 });
 
-// 強制初始化 API
+// 強制初始化 API（預設停用）
+const ALLOW_FORCE_DB_INIT = process.env.ALLOW_DB_INIT === 'true';
 app.post('/api/init-database', async (req, res) => {
+    if (!ALLOW_FORCE_DB_INIT) {
+        return res.status(403).json({
+            success: false,
+            error: '此端點僅供開發環境使用'
+        });
+    }
     try {
         console.log('🔧 強制初始化資料庫...');
-        
-        // 重新載入資料庫
         loadDatabase();
         
-        // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
-        if (!adminExists) {
-            // 創建管理員帳號
-            const adminPassword = 'gele1227';
-            const hash = await new Promise((resolve, reject) => {
-                bcrypt.hash(adminPassword, 10, (err, hash) => {
-                    if (err) reject(err);
-                    else resolve(hash);
-                });
-            });
-            
-            const adminAccount = {
-                id: database.staff_accounts.length + 1,
-                username: 'sunnyharry1',
-                password: hash,
-                name: '系統管理員',
-                role: 'admin',
-                email: '',
-                created_at: new Date().toISOString()
-            };
-            
-            database.staff_accounts.push(adminAccount);
-            saveDatabase();
-            
-            console.log('✅ 管理員帳號已創建');
-            console.log('📧 帳號: sunnyharry1');
-            console.log('🔑 密碼: gele1227');
-        
-        res.json({
-            success: true,
-                message: '資料庫初始化成功',
-                adminCreated: true,
-                adminAccount: {
-                    username: 'sunnyharry1',
-                    password: 'gele1227'
-                }
-            });
-        } else {
-            console.log('ℹ️ 管理員帳號已存在');
-            res.json({
+        if (adminExists) {
+            if (adminExists.role !== 'super_admin') {
+                adminExists.role = 'super_admin';
+                saveDatabase();
+            }
+            return res.json({
                 success: true,
-                message: '資料庫已初始化',
+                message: '資料庫已初始化，管理員帳號已存在',
                 adminCreated: false
             });
         }
+
+        const { superAdminPassword } = req.body || {};
+        if (!superAdminPassword || superAdminPassword.length < 8) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供至少 8 碼的 superAdminPassword'
+            });
+        }
+
+        const hash = await bcrypt.hash(superAdminPassword, 10);
+        const adminAccount = {
+            id: database.staff_accounts.length + 1,
+            username: 'sunnyharry1',
+            password: hash,
+            name: '系統管理員',
+            role: 'super_admin',
+            email: '',
+            created_at: new Date().toISOString()
+        };
+
+        database.staff_accounts.push(adminAccount);
+        saveDatabase();
+
+        console.log('✅ 管理員帳號已創建（未輸出明碼）');
+        res.json({
+            success: true,
+            message: '資料庫初始化成功，已創建 super_admin',
+            adminCreated: true
+        });
     } catch (error) {
         console.error('❌ 強制初始化失敗:', error);
         res.status(500).json({

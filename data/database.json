@@ -5,7 +5,7 @@
       "username": "sunnyharry1",
       "password": "$2a$10$KXaGC5pXcvQ/17KYAx.ytuv1TEdPykOj3Y/z6dSsmJVGN0TTIot0.",
       "name": "系統管理員",
-      "role": "admin",
+      "role": "super_admin",
       "email": "admin@example.com",
       "created_at": "2025-08-01T15:48:09.009557"
     },
