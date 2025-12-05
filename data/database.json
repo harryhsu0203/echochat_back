@@ -7,7 +7,13 @@
       "name": "系統管理員",
       "role": "super_admin",
       "email": "admin@example.com",
-      "created_at": "2025-08-01T15:48:09.009557"
+      "created_at": "2025-08-01T15:48:09.009557",
+      "plan": "enterprise",
+      "token_used_in_cycle": 0,
+      "token_bonus_balance": 0,
+      "conversation_used_in_cycle": 0,
+      "billing_cycle_start": "2025-12-01T07:48:09.009Z",
+      "next_billing_at": "2026-01-01T07:48:09.009Z"
     },
     {
       "id": 2,
@@ -17,7 +23,8 @@
       "role": "user",
       "email": "test@example.com",
       "created_at": "2025-08-03T15:15:00.839Z",
-      "updated_at": "2025-08-03T15:15:35.745Z"
+      "updated_at": "2025-08-03T15:15:35.745Z",
+      "plan": "free"
     }
   ],
   "user_questions": [],
@@ -242,14 +249,8 @@
       "updatedAt": "2025-08-01T15:44:09.009569"
     }
   ],
-  "ai_assistant_config": [
-    {
-      "assistant_name": "AI 美髮助理",
-      "llm": "gpt-4o-mini",
-      "use_case": "customer-service",
-      "description": "我是您的專業美髮助理，很高興為您服務！"
-    }
-  ],
+  "channels": [],
+  "ai_assistant_configs": [],
   "email_verifications": [
     {
       "email": "test@example.com",
@@ -282,5 +283,7 @@
       "verified": false
     }
   ],
-  "password_reset_requests": []
+  "password_reset_requests": [],
+  "line_api_settings": [],
+  "line_bots": []
 }

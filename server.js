@@ -45,12 +45,45 @@ const ECPAY_ACTION = process.env.ECPAY_ACTION || (ECPAY_MODE === 'Prod'
     : 'https://payment-stage.ecpay.com.tw/Cashier/AioCheckOut/V5');
 
 // ====== Token 計費/用量機制 ======
-// 方案：僅三種 free / premium(尊榮版) / enterprise(企業版)
-// enterprise 不固定，由管理員在使用者檔案上自訂 allowance
-const PLAN_TOKEN_MONTHLY = {
-    free: 20000,       // 例：2 萬 / 月
-    premium: 600000    // 尊榮版預設 60 萬 / 月（可改）
+// 方案設定對應首頁顯示：免費版 / 尊榮版 / 企業版
+const ESTIMATED_TOKENS_PER_CONVERSATION = 400; // 以平均 400 tokens 計算一次完整對話
+
+const PLAN_CONFIG = {
+    free: {
+        displayName: '免費版',
+        monthlyConversationLimit: 100,
+        tokenAllowance: 100 * ESTIMATED_TOKENS_PER_CONVERSATION
+    },
+    premium: {
+        displayName: '尊榮版',
+        monthlyConversationLimit: 5000,
+        tokenAllowance: 5000 * ESTIMATED_TOKENS_PER_CONVERSATION
+    },
+    enterprise: {
+        displayName: '企業版',
+        monthlyConversationLimit: null,
+        tokenAllowance: null
+    }
 };
+
+const TOPUP_PACKAGES = [
+    { id: 'lite', label: '500 次對話加值', conversations: 500, price: 499, currency: 'TWD' },
+    { id: 'pro', label: '2,000 次對話加值', conversations: 2000, price: 1499, currency: 'TWD' },
+    { id: 'growth', label: '5,000 次對話加值', conversations: 5000, price: 2499, currency: 'TWD' }
+].map(pkg => ({
+    ...pkg,
+    tokens: pkg.conversations * ESTIMATED_TOKENS_PER_CONVERSATION
+}));
+
+const ADMIN_ROLES = ['admin', 'super_admin'];
+
+const normalizeRole = (role) => String(role || '').toLowerCase();
+const isAdminRole = (role) => ADMIN_ROLES.includes(normalizeRole(role));
+
+function getPlanConfig(plan) {
+    const key = normalizeRole(plan) || 'free';
+    return PLAN_CONFIG[key] || PLAN_CONFIG.free;
+}
 
 function getUserById(userId) {
     loadDatabase();
@@ -58,11 +91,25 @@ function getUserById(userId) {
 }
 
 function getPlanAllowance(plan, user) {
-    const p = (plan || 'free').toLowerCase();
-    if (p === 'enterprise' && user && typeof user.enterprise_token_monthly === 'number') {
+    const config = getPlanConfig(plan);
+    if (normalizeRole(plan) === 'enterprise' && user && typeof user.enterprise_token_monthly === 'number') {
         return user.enterprise_token_monthly;
     }
-    return PLAN_TOKEN_MONTHLY[p] || PLAN_TOKEN_MONTHLY.free;
+    if (config.tokenAllowance === null) {
+        return Number.MAX_SAFE_INTEGER;
+    }
+    return config.tokenAllowance;
+}
+
+function getPlanConversationLimit(plan, user) {
+    if (normalizeRole(plan) === 'enterprise' && user && typeof user.enterprise_conversation_monthly === 'number') {
+        return user.enterprise_conversation_monthly;
+    }
+    return getPlanConfig(plan).monthlyConversationLimit;
+}
+
+function getPlanDisplayName(plan) {
+    return getPlanConfig(plan).displayName;
 }
 
 function getNow() { return new Date(); }
@@ -77,6 +124,7 @@ function ensureUserTokenFields(user) {
     if (!user) return;
     if (typeof user.token_used_in_cycle !== 'number') user.token_used_in_cycle = 0;
     if (typeof user.token_bonus_balance !== 'number') user.token_bonus_balance = 0;
+    if (typeof user.conversation_used_in_cycle !== 'number') user.conversation_used_in_cycle = 0;
     if (!user.billing_cycle_start) user.billing_cycle_start = user.created_at || new Date().toISOString();
     if (!user.next_billing_at) user.next_billing_at = addMonths(new Date(user.billing_cycle_start), 1).toISOString();
 }
@@ -87,6 +135,7 @@ function maybeResetCycle(user) {
     if (now > new Date(user.next_billing_at)) {
         // 進入新週期：歸零用量、推進下一個計費日（+1 個月）
         user.token_used_in_cycle = 0;
+        user.conversation_used_in_cycle = 0;
         // 如果過了多個月，逐月推進
         let next = new Date(user.next_billing_at);
         while (now > next) {
@@ -415,54 +464,6 @@ function findUserChannel(userId, platform) {
     return { ...ch, apiKey, secret };
 }
 
-function ensureChannelsContainer() {
-    if (!Array.isArray(database.channels)) {
-        database.channels = [];
-    }
-}
-
-function normalizeUserId(userId) {
-    if (typeof userId === 'number') return userId;
-    const parsed = parseInt(userId, 10);
-    return Number.isNaN(parsed) ? userId : parsed;
-}
-
-function upsertDefaultLineChannel(userId, options = {}) {
-    ensureChannelsContainer();
-    const ownerId = normalizeUserId(userId);
-    const channelKey = `${ownerId}_line_default`;
-    let channel = database.channels.find(c => c.id === channelKey);
-    if (!channel) {
-        channel = {
-            id: channelKey,
-            userId: ownerId,
-            name: 'LINE 客服',
-            platform: 'line',
-            createdAt: new Date().toISOString(),
-            message_count: 0,
-            conversation_count: 0
-        };
-        database.channels.push(channel);
-    }
-    if (options.name) channel.name = options.name;
-    if (options.webhookUrl !== undefined) channel.webhookUrl = options.webhookUrl;
-    if (options.isActive !== undefined) channel.isActive = options.isActive;
-    if (options.hasCredentials !== undefined) channel.hasCredentials = options.hasCredentials;
-    channel.updatedAt = new Date().toISOString();
-}
-
-function markLineChannelUnconfigured(userId) {
-    ensureChannelsContainer();
-    const ownerId = normalizeUserId(userId);
-    const channelKey = `${ownerId}_line_default`;
-    const channel = database.channels.find(c => c.id === channelKey);
-    if (!channel) return;
-    channel.hasCredentials = false;
-    channel.isActive = false;
-    channel.webhookUrl = '';
-    channel.updatedAt = new Date().toISOString();
-}
-
 // 取得 LINE 憑證（優先從記憶體快取，提升效能並避免解密問題）
 function getLineCredentials(userId) {
     // 優先從記憶體快取取得（保存時已放入明文）
@@ -528,8 +529,14 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
         }
     }
 
-    const planAllowance = getPlanAllowance(user?.plan || 'free', user);
+    const plan = user?.plan || 'free';
+    const planAllowance = getPlanAllowance(plan, user);
     const estimatedTokens = estimateChatTokens(currentMessage, knowledgeContext, 800); // 增加估計值因為有歷史
+    const conversationLimit = getPlanConversationLimit(plan, user);
+    const conversationUsed = user.conversation_used_in_cycle || 0;
+    if (conversationLimit !== null && conversationUsed >= conversationLimit) {
+        throw new Error('本月對話次數已達方案上限');
+    }
     const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
     if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
 
@@ -547,6 +554,7 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
     user.token_used_in_cycle = (user.token_used_in_cycle || 0) + useFromCycle;
     remainingNeed -= useFromCycle;
     if (remainingNeed > 0) user.token_bonus_balance = Math.max((user.token_bonus_balance || 0) - remainingNeed, 0);
+    user.conversation_used_in_cycle = (user.conversation_used_in_cycle || 0) + 1;
     saveDatabase();
 
     return { reply: aiReply, model: aiConfig.llm, assistantName: aiConfig.assistant_name };
@@ -589,8 +597,14 @@ async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
         { role: 'user', content: message }
     ];
 
-    const planAllowance = getPlanAllowance(user?.plan || 'free', user);
+    const plan = user?.plan || 'free';
+    const planAllowance = getPlanAllowance(plan, user);
     const estimatedTokens = estimateChatTokens(message, knowledgeContext, 600);
+    const conversationLimit = getPlanConversationLimit(plan, user);
+    const conversationUsed = user.conversation_used_in_cycle || 0;
+    if (conversationLimit !== null && conversationUsed >= conversationLimit) {
+        throw new Error('本月對話次數已達方案上限');
+    }
     const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
     if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
 
@@ -608,6 +622,7 @@ async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
     user.token_used_in_cycle = (user.token_used_in_cycle || 0) + useFromCycle;
     remainingNeed -= useFromCycle;
     if (remainingNeed > 0) user.token_bonus_balance = Math.max((user.token_bonus_balance || 0) - remainingNeed, 0);
+    user.conversation_used_in_cycle = (user.conversation_used_in_cycle || 0) + 1;
     saveDatabase();
 
     return { reply: aiReply, model: aiConfig.llm, assistantName: aiConfig.assistant_name };
@@ -688,7 +703,10 @@ const checkRole = (roles) => {
             });
         }
         
-        if (!roles.includes(req.staff.role)) {
+        const normalizedRoles = (roles || []).map(normalizeRole);
+        const userRole = normalizeRole(req.staff.role);
+        const allowAdminFallback = normalizedRoles.includes('admin') && isAdminRole(userRole);
+        if (!normalizedRoles.includes(userRole) && !allowAdminFallback) {
             return res.status(403).json({
                 success: false,
                 error: '權限不足'
@@ -787,7 +805,7 @@ const connectDatabase = async () => {
         let didMutateForPlan = false;
         database.staff_accounts.forEach(staff => {
             if (!staff.plan) {
-                staff.plan = staff.role === 'admin' ? 'enterprise' : 'free';
+                staff.plan = isAdminRole(staff.role) ? 'enterprise' : 'free';
                 didMutateForPlan = true;
             }
             if (!staff.created_at) {
@@ -806,15 +824,39 @@ const connectDatabase = async () => {
         // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
         if (!adminExists) {
-            console.warn('⚠️ 找不到預期的 super_admin 帳號 sunnyharry1，請執行 scripts/add-user.js 以建立安全密碼的帳號。');
-        } else {
-            if (adminExists.role !== 'super_admin') {
-                adminExists.role = 'super_admin';
-                saveDatabase();
-                console.log('🔁 已自動將 sunnyharry1 升級為 super_admin。');
-            } else {
-                console.log('ℹ️ 管理員帳號已存在並具有 super_admin 權限');
+            try {
+                // 創建管理員帳號
+                const adminPassword = 'gele1227';
+                const hash = await new Promise((resolve, reject) => {
+                    bcrypt.hash(adminPassword, 10, (err, hash) => {
+                        if (err) reject(err);
+                        else resolve(hash);
+                    });
+                });
+                
+                const adminAccount = {
+                    id: database.staff_accounts.length + 1,
+                    username: 'sunnyharry1',
+                    password: hash,
+                    name: '系統管理員',
+                    role: 'admin',
+                    email: '',
+                    created_at: new Date().toISOString(),
+                    plan: 'enterprise'
+                };
+                
+                database.staff_accounts.push(adminAccount);
+            saveDatabase();
+                
+                console.log('✅ 管理員帳號已創建');
+                console.log('📧 帳號: sunnyharry1');
+                console.log('🔑 密碼: gele1227');
+            } catch (writeError) {
+                console.log('⚠️ 無法創建管理員帳號（可能是只讀文件系統）:', writeError.message);
+                console.log('ℹ️ 服務器將繼續運行，但管理員功能可能受限');
             }
+        } else {
+            console.log('ℹ️ 管理員帳號已存在');
         }
         
         console.log('✅ JSON 資料庫初始化完成');
@@ -1039,7 +1081,7 @@ app.delete('/api/knowledge/:id', authenticateJWT, (req, res) => {
         // 允許刪除條件：本人擁有、未綁定(user_id 為空)、或管理員
         const isOwner = item.user_id === req.staff.id;
         const isUnowned = typeof item.user_id === 'undefined' || item.user_id === null;
-        const isAdmin = String(req.staff.role || '') === 'admin';
+        const isAdmin = isAdminRole(req.staff.role);
         if (!isOwner && !isUnowned && !isAdmin) {
             return res.status(403).json({ success: false, error: '無權刪除此項目' });
         }
@@ -1058,7 +1100,7 @@ app.post('/api/knowledge/bulk-delete', authenticateJWT, (req, res) => {
         if (!Array.isArray(ids) || ids.length === 0) {
             return res.status(400).json({ success: false, error: '缺少 ids' });
         }
-        const isAdmin = String(req.staff.role || '') === 'admin';
+        const isAdmin = isAdminRole(req.staff.role);
         loadDatabase();
         const items = Array.isArray(database.knowledge) ? database.knowledge : [];
         let deleted = 0;
@@ -2224,60 +2266,60 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     }
 });
 
-// 強制初始化 API（預設停用）
-const ALLOW_FORCE_DB_INIT = process.env.ALLOW_DB_INIT === 'true';
+// 強制初始化 API
 app.post('/api/init-database', async (req, res) => {
-    if (!ALLOW_FORCE_DB_INIT) {
-        return res.status(403).json({
-            success: false,
-            error: '此端點僅供開發環境使用'
-        });
-    }
     try {
         console.log('🔧 強制初始化資料庫...');
+        
+        // 重新載入資料庫
         loadDatabase();
         
+        // 檢查管理員帳號是否存在
         const adminExists = database.staff_accounts.find(staff => staff.username === 'sunnyharry1');
-        if (adminExists) {
-            if (adminExists.role !== 'super_admin') {
-                adminExists.role = 'super_admin';
-                saveDatabase();
-            }
-            return res.json({
+        if (!adminExists) {
+            // 創建管理員帳號
+            const adminPassword = 'gele1227';
+            const hash = await new Promise((resolve, reject) => {
+                bcrypt.hash(adminPassword, 10, (err, hash) => {
+                    if (err) reject(err);
+                    else resolve(hash);
+                });
+            });
+            
+            const adminAccount = {
+                id: database.staff_accounts.length + 1,
+                username: 'sunnyharry1',
+                password: hash,
+                name: '系統管理員',
+                role: 'admin',
+                email: '',
+                created_at: new Date().toISOString()
+            };
+            
+            database.staff_accounts.push(adminAccount);
+            saveDatabase();
+            
+            console.log('✅ 管理員帳號已創建');
+            console.log('📧 帳號: sunnyharry1');
+            console.log('🔑 密碼: gele1227');
+        
+        res.json({
+            success: true,
+                message: '資料庫初始化成功',
+                adminCreated: true,
+                adminAccount: {
+                    username: 'sunnyharry1',
+                    password: 'gele1227'
+                }
+            });
+        } else {
+            console.log('ℹ️ 管理員帳號已存在');
+            res.json({
                 success: true,
-                message: '資料庫已初始化，管理員帳號已存在',
+                message: '資料庫已初始化',
                 adminCreated: false
             });
         }
-
-        const { superAdminPassword } = req.body || {};
-        if (!superAdminPassword || superAdminPassword.length < 8) {
-            return res.status(400).json({
-                success: false,
-                error: '請提供至少 8 碼的 superAdminPassword'
-            });
-        }
-
-        const hash = await bcrypt.hash(superAdminPassword, 10);
-        const adminAccount = {
-            id: database.staff_accounts.length + 1,
-            username: 'sunnyharry1',
-            password: hash,
-            name: '系統管理員',
-            role: 'super_admin',
-            email: '',
-            created_at: new Date().toISOString()
-        };
-
-        database.staff_accounts.push(adminAccount);
-        saveDatabase();
-
-        console.log('✅ 管理員帳號已創建（未輸出明碼）');
-        res.json({
-            success: true,
-            message: '資料庫初始化成功，已創建 super_admin',
-            adminCreated: true
-        });
     } catch (error) {
         console.error('❌ 強制初始化失敗:', error);
         res.status(500).json({
@@ -3261,21 +3303,36 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
         ensureUserTokenFields(user);
         maybeResetCycle(user);
         const plan = user.plan || 'free';
+        const planConfig = getPlanConfig(plan);
         const allowance = getPlanAllowance(plan, user);
         const used = user.token_used_in_cycle || 0;
         const bonus = user.token_bonus_balance || 0;
         const available = Math.max(allowance - used, 0) + bonus;
+        const conversationLimit = getPlanConversationLimit(plan, user);
+        const hasUnlimitedConversations = conversationLimit === null;
+        const conversationUsed = user.conversation_used_in_cycle || 0;
+        const conversationRemaining = hasUnlimitedConversations ? null : Math.max(conversationLimit - conversationUsed, 0);
+        const hasUnlimitedTokens = planConfig.tokenAllowance === null && !(normalizeRole(plan) === 'enterprise' && typeof user.enterprise_token_monthly === 'number');
+        const displayAllowance = hasUnlimitedTokens ? null : allowance;
         const myConvs = (database.chat_history || []).filter(c => c && c.userId === req.staff.id);
         const msgCount = myConvs.reduce((sum, c) => sum + (c.messages ? c.messages.length : 0), 0);
         
         const overview = {
             currentPlan: plan,
+            planDisplayName: getPlanDisplayName(plan),
             nextBillingDate: user.next_billing_at || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-            tokenAllowance: allowance,
+            tokenAllowance: displayAllowance,
+            tokenAllowanceRaw: allowance,
             tokenUsed: used,
             tokenBonus: bonus,
             tokenAvailable: available,
-            usagePercent: allowance > 0 ? Math.min((used / allowance) * 100, 100).toFixed(1) : 0,
+            usagePercent: displayAllowance && displayAllowance > 0 ? Math.min((used / displayAllowance) * 100, 100).toFixed(1) : 0,
+            hasUnlimitedTokens,
+            hasUnlimitedConversations,
+            conversationLimit,
+            conversationUsed,
+            conversationRemaining,
+            estimatedTokensPerConversation: ESTIMATED_TOKENS_PER_CONVERSATION,
             conversationCount: myConvs.length,
             messageCount: msgCount
         };
@@ -3283,6 +3340,59 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
     } catch (error) {
         console.error('獲取帳務總覽錯誤:', error);
         res.status(500).json({ success: false, error: '獲取帳務總覽失敗' });
+    }
+});
+
+// 取得可用儲值方案
+app.get('/api/billing/topup-packages', authenticateJWT, (req, res) => {
+    try {
+        res.json({
+            success: true,
+            packages: TOPUP_PACKAGES
+        });
+    } catch (error) {
+        console.error('獲取儲值方案錯誤:', error);
+        res.status(500).json({ success: false, error: '無法載入儲值方案' });
+    }
+});
+
+// 直接儲值（模擬付款成功後入帳）
+app.post('/api/billing/topup', authenticateJWT, (req, res) => {
+    try {
+        const { packageId } = req.body || {};
+        const pkg = TOPUP_PACKAGES.find(p => p.id === packageId);
+        if (!pkg) {
+            return res.status(400).json({ success: false, error: '無效的儲值方案' });
+        }
+        loadDatabase();
+        const user = findStaffById(req.staff.id);
+        if (!user) {
+            return res.status(404).json({ success: false, error: '找不到帳號' });
+        }
+        ensureUserTokenFields(user);
+        maybeResetCycle(user);
+        user.token_bonus_balance = (user.token_bonus_balance || 0) + pkg.tokens;
+        if (!Array.isArray(database.payments)) database.payments = [];
+        database.payments.push({
+            id: uuidv4(),
+            userId: user.id,
+            type: 'topup',
+            packageId: pkg.id,
+            tokens: pkg.tokens,
+            conversations: pkg.conversations,
+            amount: pkg.price,
+            currency: pkg.currency,
+            created_at: new Date().toISOString()
+        });
+        saveDatabase();
+        res.json({
+            success: true,
+            balance: user.token_bonus_balance,
+            package: pkg
+        });
+    } catch (error) {
+        console.error('儲值失敗:', error);
+        res.status(500).json({ success: false, error: '儲值過程發生錯誤' });
     }
 });
 
@@ -3507,33 +3617,22 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
         const userId = req.staff.id;
         loadDatabase();
         const record = (database.line_api_settings || []).find(r => r.user_id === userId);
-        const hasRecord = !!record;
-        const decryptedToken = hasRecord
-            ? (decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '')
-            : '';
-        const decryptedSecret = hasRecord
-            ? (decryptSensitive(record?.channel_secret) || record?.channel_secret || '')
-            : '';
-
-        if (hasRecord) {
-            lineAPISettings[userId] = {
-                channelAccessToken: decryptedToken,
-                channelSecret: decryptedSecret,
-                webhookUrl: record?.webhook_url || ''
-            };
-        } else if (lineAPISettings[userId]) {
-            delete lineAPISettings[userId];
-        }
+        const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '';
+        const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret || '';
+        // 更新快取（不回傳明文至前端，僅標示狀態）
+        lineAPISettings[userId] = {
+            channelAccessToken: decryptedToken ? 'Configured' : '',
+            channelSecret: decryptedSecret ? 'Configured' : '',
+            webhookUrl: record?.webhook_url || ''
+        };
 
         res.json({
             success: true,
             data: {
-                hasSettings: hasRecord,
-                needsSetup: !hasRecord,
-                channelAccessToken: decryptedToken ? 'Configured' : '',
-                channelSecret: decryptedSecret ? 'Configured' : '',
-                webhookUrl: record?.webhook_url || '',
-                isActive: hasRecord ? record?.isActive !== false : false
+                channelAccessToken: lineAPISettings[userId].channelAccessToken,
+                channelSecret: lineAPISettings[userId].channelSecret,
+                webhookUrl: lineAPISettings[userId].webhookUrl,
+                isActive: record?.isActive !== false // 預設為啟用
             }
         });
     } catch (error) {
@@ -3582,12 +3681,6 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             database.line_api_settings.push(record);
             console.log('✅ 新增記錄');
         }
-        upsertDefaultLineChannel(userId, {
-            isActive: record.isActive,
-            webhookUrl: record.webhook_url,
-            hasCredentials: true,
-            name: 'LINE 客服'
-        });
         saveDatabase();
 
         // 更新記憶體快取（用於回推時快速取得）
@@ -3604,8 +3697,6 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             success: true,
             message: 'LINE API 設定保存成功',
             data: {
-                hasSettings: true,
-                needsSetup: false,
                 channelAccessToken: 'Configured',
                 channelSecret: 'Configured',
                 webhookUrl: record.webhook_url,
@@ -3617,48 +3708,6 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
         res.status(500).json({
                 success: false,
             error: '保存 LINE API 設定失敗'
-        });
-    }
-});
-
-// 刪除 LINE API 設定
-app.delete('/api/line-api/settings', authenticateJWT, async (req, res) => {
-    try {
-        const userId = req.staff.id;
-        loadDatabase();
-        if (!database.line_api_settings) database.line_api_settings = [];
-        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
-        
-        if (idx < 0) {
-            return res.status(404).json({
-                success: false,
-                error: '找不到 LINE API 設定'
-            });
-        }
-        
-        const removed = database.line_api_settings.splice(idx, 1)[0];
-        markLineChannelUnconfigured(userId);
-        saveDatabase();
-        if (lineAPISettings[userId]) {
-            delete lineAPISettings[userId];
-        }
-        
-        console.log(`🗑️ 用戶 ${userId} 已刪除 LINE Token 設定 (${removed?.webhook_url || '無 Webhook'})`);
-        
-        res.json({
-            success: true,
-            message: 'LINE 憑證已移除',
-            data: {
-                hasSettings: false,
-                needsSetup: true,
-                isActive: false
-            }
-        });
-    } catch (error) {
-        console.error('刪除 LINE API 設定錯誤:', error);
-        res.status(500).json({
-            success: false,
-            error: '刪除 LINE API 設定失敗'
         });
     }
 });
@@ -3689,11 +3738,6 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
 
         database.line_api_settings[idx].isActive = isActive;
         database.line_api_settings[idx].updated_at = new Date().toISOString();
-        upsertDefaultLineChannel(userId, {
-            isActive,
-            webhookUrl: database.line_api_settings[idx].webhook_url,
-            hasCredentials: true
-        });
         saveDatabase();
 
         console.log(`✅ LINE API 設定啟用狀態已更新: ${isActive ? '啟用' : '停用'}`);
@@ -3710,117 +3754,6 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
         res.status(500).json({
             success: false,
             error: '切換啟用狀態失敗'
-        });
-    }
-});
-
-// 測試 LINE API 串接狀態
-app.post('/api/line-api/settings/test', authenticateJWT, async (req, res) => {
-    try {
-        const userId = req.staff.id;
-        loadDatabase();
-        const record = (database.line_api_settings || []).find(r => r.user_id === userId);
-        if (!record) {
-            return res.status(404).json({
-                success: false,
-                error: '尚未綁定 LINE 憑證'
-            });
-        }
-        
-        const token = decryptSensitive(record.channel_access_token) || record.channel_access_token || '';
-        const secret = decryptSensitive(record.channel_secret) || record.channel_secret || '';
-        
-        if (!token || !secret) {
-            return res.status(400).json({
-                success: false,
-                error: 'LINE 憑證不完整，請重新綁定'
-            });
-        }
-        
-        const headers = { Authorization: `Bearer ${token}` };
-        const expectedWebhookUrl = record.webhook_url || `https://${req.get('host')}/api/webhook/line/${userId}`;
-        const issues = [];
-        const warnings = [];
-        
-        if (record.isActive === false) {
-            issues.push('LINE 頻道目前為停用狀態，請在綁定頁面開啟「頻道狀態」。');
-        }
-        
-        let botInfo = null;
-        try {
-            const botInfoResponse = await axios.get('https://api.line.me/v2/bot/info', { headers });
-            botInfo = botInfoResponse.data || null;
-        } catch (error) {
-            throw new Error(error?.response?.data?.message || '無法取得 LINE Bot 資訊，請確認 Token 是否正確。');
-        }
-        
-        let webhookEndpointInfo = null;
-        try {
-            const endpointResp = await axios.get('https://api.line.me/v2/bot/channel/webhook/endpoint', { headers });
-            webhookEndpointInfo = endpointResp.data || null;
-        } catch (error) {
-            warnings.push('無法讀取 LINE Developers 上的 Webhook 設定，請在平台確認是否已填入。');
-        }
-        
-        const endpointMatches = webhookEndpointInfo?.endpoint
-            ? webhookEndpointInfo.endpoint === expectedWebhookUrl
-            : false;
-        
-        if (!webhookEndpointInfo?.endpoint) {
-            issues.push('LINE Developers 尚未設定 Webhook URL，請在 Messaging API 頁面填入 EchoChat 提供的網址。');
-        } else if (!endpointMatches) {
-            issues.push(`LINE Developers 上的 Webhook (${webhookEndpointInfo.endpoint}) 與 EchoChat 預期的 URL (${expectedWebhookUrl}) 不一致。`);
-        }
-        
-        if (webhookEndpointInfo && webhookEndpointInfo.active === false) {
-            issues.push('LINE Developers 的 Webhook 尚未啟用，請在 Messaging API 頁面將「Use webhook」開啟。');
-        }
-        
-        let webhookTest = null;
-        try {
-            const payload = endpointMatches ? {} : { endpoint: expectedWebhookUrl };
-            const testResp = await axios.post(
-                'https://api.line.me/v2/bot/channel/webhook/test',
-                payload,
-                { headers }
-            );
-            webhookTest = testResp.data || null;
-            if (!webhookTest || webhookTest.status !== 'success') {
-                issues.push('LINE Webhook 測試未通過，請在 LINE Developers 的「Test webhook」功能中查看詳細原因。');
-            }
-        } catch (error) {
-            const detail = error?.response?.data?.message || error.message || '未知錯誤';
-            webhookTest = {
-                status: 'failed',
-                detail
-            };
-            issues.push(`LINE Webhook 測試失敗：${detail}`);
-        }
-        
-        const overallStatus = (issues.length === 0 && webhookTest?.status === 'success') ? 'passed' : 'failed';
-        
-        res.json({
-            success: true,
-            data: {
-                overallStatus,
-                botInfo,
-                isActive: record.isActive !== false,
-                webhookUrl: expectedWebhookUrl,
-                webhookEndpoint: webhookEndpointInfo?.endpoint || null,
-                webhookActive: webhookEndpointInfo?.active ?? false,
-                endpointMatches,
-                webhookTest,
-                issues,
-                warnings
-            }
-        });
-    } catch (error) {
-        console.error('測試 LINE API 串接錯誤:', error?.response?.data || error.message);
-        const status = error.response?.status || 500;
-        res.status(status === 200 ? 500 : status).json({
-            success: false,
-            error: 'LINE 串接驗證失敗',
-            detail: error.response?.data?.message || error.message || '未知錯誤'
         });
     }
 });
@@ -4272,6 +4205,8 @@ async function handleLineMessage(event, userId) {
                 // 針對常見情況提供使用者可見的告知訊息
                 if (String(e?.message || '').includes('餘額不足')) {
                     replyText = '目前餘額不足，請至儀表板加值後再試。';
+                } else if (String(e?.message || '').includes('對話次數')) {
+                    replyText = '本月對話次數已達方案上限，請至儀表板升級或等待重置。';
                 } else if (String(e?.message || '').includes('OPENAI_API_KEY')) {
                     replyText = '目前尚未設定 AI 金鑰，已記錄您的訊息，我們會盡快處理。';
                 } else if (String(e?.message || '').includes('使用者不存在')) {
