@@ -8,6 +8,11 @@ const fs = require('fs').promises;
 const path = require('path');
 require('dotenv').config();
 
+const DEFAULT_SENDER_EMAIL = 'contact@echochat.com.tw';
+const EMAIL_ACCOUNT = process.env.EMAIL_USER || 'echochatsup@gmail.com';
+const EMAIL_PASSWORD = process.env.EMAIL_PASS || 'skoh eqrm behq twmt';
+const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM || DEFAULT_SENDER_EMAIL;
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'echochat-secret-key-2025';
@@ -159,8 +164,8 @@ const authenticateJWT = (req, res, next) => {
 const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: {
-        user: process.env.EMAIL_USER || 'echochatsup@gmail.com',
-        pass: process.env.EMAIL_PASS || 'skoh eqrm behq twmt'
+        user: EMAIL_ACCOUNT,
+        pass: EMAIL_PASSWORD
     },
     tls: {
         rejectUnauthorized: false
@@ -190,7 +195,7 @@ const generateVerificationCode = () => {
 // 發送驗證碼
 const sendVerificationEmail = async (email, code) => {
     const mailOptions = {
-        from: process.env.EMAIL_USER || 'echochatsup@gmail.com',
+        from: EMAIL_FROM_ADDRESS,
         to: email,
         subject: 'EchoChat - 電子郵件驗證碼',
         html: `
@@ -211,6 +216,7 @@ const sendVerificationEmail = async (email, code) => {
     
     try {
         console.log(`📧 嘗試發送驗證碼到: ${email}`);
+        console.log(`   └─ 使用寄件者: ${EMAIL_FROM_ADDRESS}（SMTP 帳號: ${EMAIL_ACCOUNT}）`);
         const result = await transporter.sendMail(mailOptions);
         console.log(`✅ 郵件發送成功: ${result.messageId}`);
         return result;
@@ -236,7 +242,8 @@ app.get('/api/test-email', async (req, res) => {
         res.json({
             success: isConfigValid,
             message: isConfigValid ? '電子郵件配置正常' : '電子郵件配置有問題',
-            emailUser: process.env.EMAIL_USER || 'echochatsup@gmail.com',
+            emailUser: EMAIL_ACCOUNT,
+            emailFrom: EMAIL_FROM_ADDRESS,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
@@ -767,7 +774,7 @@ app.post('/api/forgot-password', async (req, res) => {
         // 發送電子郵件
         try {
             const mailOptions = {
-                from: process.env.EMAIL_USER || 'echochatsup@gmail.com',
+                from: EMAIL_FROM_ADDRESS,
                 to: email,
                 subject: 'EchoChat - 密碼重設驗證碼',
                 html: `
@@ -786,7 +793,7 @@ app.post('/api/forgot-password', async (req, res) => {
             };
             
             await transporter.sendMail(mailOptions);
-            console.log('✅ 密碼重設驗證碼已發送到:', email);
+            console.log('✅ 密碼重設驗證碼已發送到:', email, `（寄件者: ${EMAIL_FROM_ADDRESS}）`);
             
             res.json({
                 success: true,
@@ -879,6 +886,7 @@ app.post('/api/reset-password', async (req, res) => {
 // 啟動伺服器
 app.listen(PORT, () => {
     console.log(`🚀 EchoChat API 伺服器運行在端口 ${PORT}`);
-    console.log(`📧 郵件服務: ${process.env.EMAIL_USER || 'echochatsup@gmail.com'}`);
+    console.log(`📧 郵件服務帳號: ${EMAIL_ACCOUNT}`);
+    console.log(`📮 寄件地址: ${EMAIL_FROM_ADDRESS}`);
     console.log(`💾 資料持久化: 已啟用`);
 }); 
