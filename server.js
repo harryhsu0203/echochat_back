@@ -19,6 +19,82 @@ const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 
+const DEFAULT_SENDER_EMAIL = 'contact@echochat.com.tw';
+const EMAIL_ACCOUNT = process.env.EMAIL_USER || process.env.EMAIL_ACCOUNT || '';
+const EMAIL_PASSWORD = process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || '';
+const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM || DEFAULT_SENDER_EMAIL;
+const EMAIL_HOST = process.env.EMAIL_HOST || (EMAIL_ACCOUNT.includes('gmail.com') ? 'smtp.gmail.com' : 'smtp.gmail.com');
+const EMAIL_PORT = parseInt(process.env.EMAIL_PORT || '587', 10);
+const EMAIL_SECURE = process.env.EMAIL_SECURE ? process.env.EMAIL_SECURE === 'true' : EMAIL_PORT === 465;
+
+const transporterOptions = {
+    host: EMAIL_HOST,
+    port: EMAIL_PORT,
+    secure: EMAIL_SECURE,
+    tls: {
+        rejectUnauthorized: false
+    }
+};
+
+if (EMAIL_ACCOUNT && EMAIL_PASSWORD) {
+    transporterOptions.auth = {
+        user: EMAIL_ACCOUNT,
+        pass: EMAIL_PASSWORD
+    };
+}
+
+const mailTransporter = nodemailer.createTransport(transporterOptions);
+
+function generateVerificationCode() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function buildBrandMailTemplate(title, body) {
+    return `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #667eea;">EchoChat ${title}</h2>
+            ${body}
+            <p style="color: #666; font-size: 12px; margin-top: 30px;">
+                此郵件由 EchoChat 系統自動發送，請勿回覆。
+            </p>
+        </div>
+    `;
+}
+
+async function sendVerificationEmail(email, code) {
+    const mailOptions = {
+        from: EMAIL_FROM_ADDRESS,
+        to: email,
+        subject: 'EchoChat - 電子郵件驗證碼',
+        html: buildBrandMailTemplate('電子郵件驗證', `
+            <p>您的驗證碼是：</p>
+            <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #667eea; border-radius: 8px; margin: 20px 0;">
+                ${code}
+            </div>
+            <p>此驗證碼將在10分鐘後過期。</p>
+            <p>如果您沒有要求此驗證碼，請忽略此郵件。</p>
+        `)
+    };
+    return mailTransporter.sendMail(mailOptions);
+}
+
+async function sendPasswordResetEmail(email, code) {
+    const mailOptions = {
+        from: EMAIL_FROM_ADDRESS,
+        to: email,
+        subject: 'EchoChat - 密碼重設驗證碼',
+        html: buildBrandMailTemplate('密碼重設', `
+            <p>您要求重設密碼，請使用以下驗證碼：</p>
+            <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #667eea; border-radius: 8px; margin: 20px 0;">
+                ${code}
+            </div>
+            <p>此驗證碼將在10分鐘後過期。</p>
+            <p>如果您沒有要求重設密碼，請忽略此郵件並確保您的帳號安全。</p>
+        `)
+    };
+    return mailTransporter.sendMail(mailOptions);
+}
+
 // 防重複處理的記憶體快取
 const messageCache = new Map();
 const { parseStringPromise } = require('xml2js');
@@ -977,16 +1053,133 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// 發送電子郵件驗證碼
+app.post('/api/send-verification-code', async (req, res) => {
+    try {
+        const { email } = req.body || {};
+        if (!email) {
+            return res.status(400).json({ success: false, error: '請提供電子郵件地址' });
+        }
+
+        loadDatabase();
+        if (!Array.isArray(database.email_verifications)) {
+            database.email_verifications = [];
+        }
+
+        const existingUser = (database.staff_accounts || []).find(staff => staff.email === email);
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                error: '此電子郵件已被註冊'
+            });
+        }
+
+        const code = generateVerificationCode();
+        const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+        database.email_verifications = database.email_verifications.filter(v => v.email !== email);
+        database.email_verifications.push({
+            email,
+            code,
+            expiresAt,
+            verified: false
+        });
+        saveDatabase();
+
+        try {
+            console.log('📧 發送驗證碼到:', email);
+            await sendVerificationEmail(email, code);
+            return res.json({
+                success: true,
+                message: '驗證碼已發送到您的電子郵件'
+            });
+        } catch (emailError) {
+            console.error('⚠️ 發送驗證碼郵件失敗:', emailError.message);
+            return res.json({
+                success: true,
+                message: '驗證碼已生成（郵件服務暫時不可用）',
+                code
+            });
+        }
+    } catch (error) {
+        console.error('發送驗證碼錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '發送驗證碼失敗，請稍後再試'
+        });
+    }
+});
+
+// 驗證電子郵件驗證碼
+app.post('/api/verify-code', async (req, res) => {
+    try {
+        const { email, code } = req.body || {};
+        if (!email || !code) {
+            return res.status(400).json({
+                success: false,
+                error: '請提供電子郵件與驗證碼'
+            });
+        }
+
+        loadDatabase();
+        if (!Array.isArray(database.email_verifications)) {
+            return res.status(400).json({
+                success: false,
+                error: '請先申請驗證碼'
+            });
+        }
+
+        const verification = database.email_verifications.find(
+            v => v.email === email && v.code === code && !v.verified
+        );
+
+        if (!verification) {
+            return res.status(400).json({
+                success: false,
+                error: '驗證碼無效'
+            });
+        }
+
+        if (new Date() > new Date(verification.expiresAt)) {
+            database.email_verifications = database.email_verifications.filter(v => v.email !== email);
+            saveDatabase();
+            return res.status(400).json({
+                success: false,
+                error: '驗證碼已過期'
+            });
+        }
+
+        verification.verified = true;
+        saveDatabase();
+        return res.json({
+            success: true,
+            message: '電子郵件驗證成功'
+        });
+    } catch (error) {
+        console.error('驗證碼驗證錯誤:', error);
+        res.status(500).json({
+            success: false,
+            error: '驗證失敗，請稍後再試'
+        });
+    }
+});
+
 // 註冊 API（開啟前請以權限或驗證碼保護）
 app.post('/api/register', async (req, res) => {
     try {
         const { username, password, name, email = '' } = req.body || {};
-        if (!username || !password || !name) {
+        if (!username || !password || !name || !email) {
             return res.status(400).json({ success: false, error: '缺少必要欄位' });
         }
         loadDatabase();
         if (database.staff_accounts.find(u => u.username === username)) {
             return res.status(409).json({ success: false, error: '用戶名已存在' });
+        }
+        const verifiedRecord = (database.email_verifications || []).find(
+            v => v.email === email && v.verified
+        );
+        if (!verifiedRecord) {
+            return res.status(400).json({ success: false, error: '請先驗證電子郵件' });
         }
         const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
         const hashedPassword = await bcrypt.hash(password, 10);
@@ -1001,6 +1194,7 @@ app.post('/api/register', async (req, res) => {
             created_at: new Date().toISOString()
         };
         database.staff_accounts.push(newUser);
+        database.email_verifications = (database.email_verifications || []).filter(v => v.email !== email);
         saveDatabase();
         const { password: _, ...safe } = newUser;
         res.json({ success: true, account: safe });
