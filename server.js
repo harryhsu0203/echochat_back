@@ -2150,6 +2150,11 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
 
         const list = (database.chat_history || [])
             .filter(belongsToUser)
+            .filter((c) => {
+                const platform = String(c.platform || '').toLowerCase();
+                const id = String(c.id || '');
+                return platform !== 'dashboard' && platform !== 'test' && !id.startsWith('conv_');
+            })
             .map((c) => ({
                 id: c.id,
                 platform: c.platform || (String(c.id || '').split('_')[0] || 'unknown'),
@@ -2851,6 +2856,17 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             maxTokens: 1000,
             temperature: 0.7
         });
+
+        const skipStore = !!req.body.no_store || req.body.source === 'test' || req.body.source === 'dashboard_test';
+        if (skipStore) {
+            return res.json({
+                success: true,
+                reply: aiReply,
+                conversationId: conversationId || null,
+                model: aiConfig.llm,
+                assistantName: aiConfig.assistant_name
+            });
+        }
 
         // 扣除 tokens（先扣月度，若不足則扣儲值）
         let remainingNeed = estimatedTokens;
