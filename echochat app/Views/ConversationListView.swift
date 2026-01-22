@@ -11,7 +11,6 @@ import UIKit
 
 struct ConversationListView: View {
     @Environment(\.modelContext) private var modelContext: ModelContext
-    @Query(sort: \Conversation.lastMessageTime, order: .reverse) private var conversations: [Conversation]
     @Query(sort: \LineConversation.lastMessageTime, order: .reverse) private var lineConversations: [LineConversation]
     @State private var showingNewConversation = false
     @State private var selectedFilter: ConversationFilter = .all
@@ -20,21 +19,6 @@ struct ConversationListView: View {
     // 整合所有對話
     var allConversations: [UnifiedConversation] {
         var unified: [UnifiedConversation] = []
-        
-        // 添加測試對話
-        for conversation in conversations {
-            unified.append(UnifiedConversation(
-                id: conversation.id,
-                title: conversation.title,
-                lastMessage: conversation.lastMessage,
-                lastMessageTime: conversation.lastMessageTime,
-                messageCount: conversation.messageCount,
-                platform: .test,
-                status: .active,
-                isUnread: false,
-                customerName: nil
-            ))
-        }
         
         // 添加 Line 對話
         for conversation in lineConversations {
@@ -169,57 +153,12 @@ struct ConversationListView: View {
         .sheet(isPresented: $showingNewConversation) {
             NewConversationView()
         }
-        .onAppear {
-            createSampleData()
-        }
     }
     
     private func createNewConversation() {
         showingNewConversation = true
     }
     
-    private func createSampleData() {
-        // 檢查是否已經有對話數據
-        if allConversations.isEmpty {
-            // 創建測試對話
-            let testConversation = Conversation(title: "產品諮詢")
-            testConversation.lastMessage = "請問你們的產品有什麼特色？"
-            testConversation.lastMessageTime = Date().addingTimeInterval(-3600) // 1小時前
-            testConversation.messageCount = 5
-            modelContext.insert(testConversation)
-            
-            let testConversation2 = Conversation(title: "技術支援")
-            testConversation2.lastMessage = "我的帳號無法登入，請協助處理"
-            testConversation2.lastMessageTime = Date().addingTimeInterval(-7200) // 2小時前
-            testConversation2.messageCount = 8
-            modelContext.insert(testConversation2)
-            
-            // 創建 Line 對話
-            let lineConversation1 = LineConversation(customerId: "line_001", customerName: "張小明")
-            lineConversation1.lastMessage = "您好，我想詢問關於產品退貨的事項"
-            lineConversation1.lastMessageTime = Date().addingTimeInterval(-1800) // 30分鐘前
-            lineConversation1.messageCount = 3
-            lineConversation1.status = .active
-            lineConversation1.isUnread = true
-            modelContext.insert(lineConversation1)
-            
-            let lineConversation2 = LineConversation(customerId: "line_002", customerName: "李小華")
-            lineConversation2.lastMessage = "請問你們的客服時間是幾點到幾點？"
-            lineConversation2.lastMessageTime = Date().addingTimeInterval(-5400) // 1.5小時前
-            lineConversation2.messageCount = 6
-            lineConversation2.status = .active
-            lineConversation2.isUnread = false
-            modelContext.insert(lineConversation2)
-            
-            let lineConversation3 = LineConversation(customerId: "line_003", customerName: "王小美")
-            lineConversation3.lastMessage = "我想申請會員升級，需要什麼條件？"
-            lineConversation3.lastMessageTime = Date().addingTimeInterval(-86400) // 1天前
-            lineConversation3.messageCount = 12
-            lineConversation3.status = .resolved
-            lineConversation3.isUnread = false
-            modelContext.insert(lineConversation3)
-        }
-    }
 }
 
 // 統一對話模型
@@ -290,7 +229,6 @@ enum ConversationPlatform: String, CaseIterable {
 
 enum ConversationFilter: CaseIterable {
     case all
-    case test
     case line
     case whatsapp
     case facebook
@@ -300,8 +238,6 @@ enum ConversationFilter: CaseIterable {
         switch self {
         case .all:
             return "全部"
-        case .test:
-            return "測試"
         case .line:
             return "Line"
         case .whatsapp:
@@ -317,8 +253,6 @@ enum ConversationFilter: CaseIterable {
         switch self {
         case .all:
             return nil
-        case .test:
-            return .test
         case .line:
             return .line
         case .whatsapp:
