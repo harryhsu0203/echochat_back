@@ -12,7 +12,6 @@ import UIKit
 struct ConversationListView: View {
     @Environment(\.modelContext) private var modelContext: ModelContext
     @Query(sort: \LineConversation.lastMessageTime, order: .reverse) private var lineConversations: [LineConversation]
-    @State private var showingNewConversation = false
     @State private var selectedFilter: ConversationFilter = .all
     @State private var searchText = ""
     
@@ -81,12 +80,6 @@ struct ConversationListView: View {
                             .foregroundColor(.primary)
                         
                         Spacer()
-                        
-                        Button(action: createNewConversation) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.title2)
-                                .foregroundColor(.blue)
-                        }
                     }
                     
                     // 搜尋欄
@@ -135,6 +128,7 @@ struct ConversationListView: View {
                 // 對話列表
                 if filteredConversations.isEmpty {
                     EmptyStateView()
+                        .padding(.bottom, 80)
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 12) {
@@ -144,19 +138,38 @@ struct ConversationListView: View {
                         }
                         .padding(.horizontal, 20)
                         .padding(.vertical, 10)
+                        .padding(.bottom, 80)
                     }
                 }
             }
         }
         .navigationTitle("對話")
         .navigationBarTitleDisplayMode(.large)
-        .sheet(isPresented: $showingNewConversation) {
-            NewConversationView()
+        .onAppear {
+            cleanupSampleConversations()
         }
     }
     
-    private func createNewConversation() {
-        showingNewConversation = true
+    private func cleanupSampleConversations() {
+        do {
+            // 移除本機測試對話
+            let testConversations = try modelContext.fetch(FetchDescriptor<Conversation>())
+            for conversation in testConversations {
+                modelContext.delete(conversation)
+            }
+
+            // 移除示例 Line 對話（僅移除明顯測試 ID）
+            let sampleIds = ["line_001", "line_002", "line_003"]
+            let lineList = try modelContext.fetch(FetchDescriptor<LineConversation>())
+            for conversation in lineList {
+                if sampleIds.contains(conversation.customerId) || conversation.customerId.hasPrefix("CUST") {
+                    modelContext.delete(conversation)
+                }
+            }
+            try modelContext.save()
+        } catch {
+            // 忽略清理失敗
+        }
     }
     
 }
