@@ -2586,6 +2586,9 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         
         // 驗證模型名稱
         const validModels = [
+            'gpt-5.2',
+            'gpt-5.1',
+            'gpt-5.0',
             'gpt-4.1',
             'gpt-4.1-mini',
             'gpt-4.1-nano',
@@ -2933,6 +2936,27 @@ app.get('/api/health', (req, res) => {
 app.get('/api/ai-models', (req, res) => {
     try {
         const models = {
+            'gpt-5.2': {
+                name: 'GPT-5.2',
+                description: '最新旗艦模型，適合最高品質與高準確度場景',
+                features: ['最高準確度', '強推理能力', '多語言支援', '適合複雜任務'],
+                pricing: '頂級',
+                speed: '中等'
+            },
+            'gpt-5.1': {
+                name: 'GPT-5.1',
+                description: '高品質旗艦模型，適合關鍵任務與專業場景',
+                features: ['高準確度', '穩定回覆', '多語言支援', '適合專業任務'],
+                pricing: '高階',
+                speed: '中等'
+            },
+            'gpt-5.0': {
+                name: 'GPT-5.0',
+                description: '新一代高品質模型，兼顧品質與效率',
+                features: ['高品質回覆', '多語言支援', '通用能力強'],
+                pricing: '高階',
+                speed: '中等'
+            },
             'gpt-4.1': {
                 name: 'GPT-4.1',
                 description: '最新旗艦模型，適合高品質與高準確度場景',
