@@ -1740,7 +1740,7 @@ app.get('/api/appointments/slots', (req, res) => {
 // 建立預約（公開）
 app.post('/api/appointments/book', (req, res) => {
     try {
-        const { name, contact, datetime, note } = req.body || {};
+        const { name, contact, datetime, note, platform, customerId, customerName, location } = req.body || {};
         if (!name || !contact || !datetime) {
             return res.status(400).json({ success: false, error: '缺少必要欄位' });
         }
@@ -1758,12 +1758,29 @@ app.post('/api/appointments/book', (req, res) => {
         }
 
         const nextId = database.appointments.length ? Math.max(...database.appointments.map(x => x.id || 0)) + 1 : 1;
+        let normalizedLocation = null;
+        if (location) {
+            if (typeof location === 'string') {
+                normalizedLocation = { address: location.trim() };
+            } else if (typeof location === 'object') {
+                normalizedLocation = {
+                    name: location.name ? String(location.name).trim() : undefined,
+                    address: location.address ? String(location.address).trim() : undefined,
+                    lat: typeof location.lat === 'number' ? location.lat : undefined,
+                    lng: typeof location.lng === 'number' ? location.lng : undefined
+                };
+            }
+        }
         const item = {
             id: nextId,
             datetime: normalized,
             name: String(name).trim(),
             contact: String(contact).trim(),
             note: note ? String(note).trim() : '',
+            platform: platform ? String(platform).trim().toLowerCase() : 'web',
+            customerId: customerId ? String(customerId).trim() : null,
+            customerName: customerName ? String(customerName).trim() : null,
+            location: normalizedLocation,
             status: 'pending',
             created_at: new Date().toISOString()
         };
@@ -1773,6 +1790,26 @@ app.post('/api/appointments/book', (req, res) => {
     } catch (e) {
         console.error('建立預約失敗:', e.message);
         return res.status(500).json({ success: false, error: '建立預約失敗' });
+    }
+});
+
+// 取得預約時段表（依日期分組，公開）
+app.get('/api/appointments/slots-table', (req, res) => {
+    try {
+        loadDatabase();
+        const all = Array.isArray(database.appointments) ? database.appointments : [];
+        const booked = new Set(all.filter(x => x.status !== 'cancelled').map(x => new Date(x.datetime).toISOString()));
+        const slots = generateDefaultSlots(14).filter(iso => !booked.has(iso));
+        const grouped = {};
+        slots.forEach((iso) => {
+            const dateKey = iso.split('T')[0];
+            if (!grouped[dateKey]) grouped[dateKey] = [];
+            grouped[dateKey].push(iso);
+        });
+        return res.json({ success: true, slots: grouped });
+    } catch (e) {
+        console.error('取得預約時段表失敗:', e.message);
+        return res.status(500).json({ success: false, error: '無法取得預約時段表' });
     }
 });
 
@@ -1841,6 +1878,205 @@ app.post('/api/appointments/:id/status', authenticateJWT, (req, res) => {
         return res.json({ success: true, item: database.appointments[idx] });
     } catch (e) {
         return res.status(500).json({ success: false, error: '更新狀態失敗' });
+    }
+});
+
+// 儀表板統計 API
+app.get('/api/stats', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        const userId = req.staff?.id;
+        const isAdmin = isAdminRole(req.staff?.role);
+
+        const belongsToUser = (conv) => {
+            if (!conv) return false;
+            if (isAdmin) return true;
+            if (conv.userId && String(conv.userId) === String(userId)) return true;
+            const id = String(conv.id || '');
+            return (
+                id.startsWith(`line_${userId}_`) ||
+                id.startsWith(`slack_${userId}_`) ||
+                id.startsWith(`telegram_${userId}_`) ||
+                id.startsWith(`messenger_${userId}_`) ||
+                id.startsWith(`discord_${userId}_`)
+            );
+        };
+
+        const conversations = (database.chat_history || []).filter(belongsToUser);
+        const totalConversations = conversations.length;
+        const totalMessages = conversations.reduce((sum, conv) => sum + (Array.isArray(conv.messages) ? conv.messages.length : 0), 0);
+        const totalUsers = Array.isArray(database.staff_accounts) ? database.staff_accounts.length : 0;
+        const knowledgeItems = (database.knowledge || []).filter(k => isAdmin || !k.user_id || k.user_id === userId).length;
+
+        let responseTimes = [];
+        conversations.forEach((conv) => {
+            const msgs = Array.isArray(conv.messages) ? conv.messages : [];
+            for (let i = 0; i < msgs.length - 1; i++) {
+                const cur = msgs[i];
+                const next = msgs[i + 1];
+                if (cur.role === 'user' && next.role === 'assistant') {
+                    const t1 = new Date(cur.timestamp || cur.created_at || cur.time || 0).getTime();
+                    const t2 = new Date(next.timestamp || next.created_at || next.time || 0).getTime();
+                    if (t1 && t2 && t2 >= t1) {
+                        responseTimes.push((t2 - t1) / 1000);
+                    }
+                }
+            }
+        });
+        const avgSeconds = responseTimes.length
+            ? Math.round((responseTimes.reduce((a, b) => a + b, 0) / responseTimes.length) * 10) / 10
+            : 0;
+
+        return res.json({
+            success: true,
+            data: {
+                totalUsers,
+                totalMessages,
+                totalConversations,
+                knowledgeItems,
+                avgResponseTime: avgSeconds ? `${avgSeconds}s` : '0s',
+                lastUpdated: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('取得統計數據錯誤:', error);
+        return res.status(500).json({ success: false, error: '無法取得統計數據' });
+    }
+});
+
+app.get('/api/stats/activity', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        const userId = req.staff?.id;
+        const isAdmin = isAdminRole(req.staff?.role);
+        const belongsToUser = (conv) => {
+            if (!conv) return false;
+            if (isAdmin) return true;
+            if (conv.userId && String(conv.userId) === String(userId)) return true;
+            const id = String(conv.id || '');
+            return (
+                id.startsWith(`line_${userId}_`) ||
+                id.startsWith(`slack_${userId}_`) ||
+                id.startsWith(`telegram_${userId}_`) ||
+                id.startsWith(`messenger_${userId}_`) ||
+                id.startsWith(`discord_${userId}_`)
+            );
+        };
+
+        const conversations = (database.chat_history || []).filter(belongsToUser);
+        const messages = conversations.flatMap(conv => Array.isArray(conv.messages) ? conv.messages : []);
+        const countsByDate = {};
+        messages.forEach((msg) => {
+            const ts = msg.timestamp || msg.created_at || msg.time;
+            if (!ts) return;
+            const dateKey = new Date(ts).toISOString().split('T')[0];
+            countsByDate[dateKey] = (countsByDate[dateKey] || 0) + 1;
+        });
+
+        const labels = [];
+        const data = [];
+        const weekLabel = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
+        const now = new Date();
+        for (let i = 6; i >= 0; i--) {
+            const d = new Date(now);
+            d.setDate(d.getDate() - i);
+            const dateKey = d.toISOString().split('T')[0];
+            labels.push(weekLabel[d.getDay()]);
+            data.push(countsByDate[dateKey] || 0);
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                labels,
+                datasets: [{
+                    label: '活躍用戶',
+                    data,
+                    borderColor: '#667eea',
+                    backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                    tension: 0.4,
+                    fill: true
+                }]
+            }
+        });
+    } catch (error) {
+        console.error('取得活躍度統計錯誤:', error);
+        return res.status(500).json({ success: false, error: '無法取得活躍度統計' });
+    }
+});
+
+app.get('/api/stats/recent-activity', authenticateJWT, (req, res) => {
+    try {
+        loadDatabase();
+        const userId = req.staff?.id;
+        const isAdmin = isAdminRole(req.staff?.role);
+
+        const toDate = (value) => {
+            const d = new Date(value || 0);
+            return isNaN(d.getTime()) ? null : d;
+        };
+
+        const formatRelative = (date) => {
+            if (!date) return '剛剛';
+            const diff = Date.now() - date.getTime();
+            if (diff < 60 * 1000) return '剛剛';
+            if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)} 分鐘前`;
+            if (diff < 24 * 60 * 60 * 1000) return `${Math.floor(diff / 3600000)} 小時前`;
+            return `${Math.floor(diff / 86400000)} 天前`;
+        };
+
+        const activities = [];
+        const users = Array.isArray(database.staff_accounts) ? database.staff_accounts : [];
+        users.forEach((u) => {
+            const created = toDate(u.created_at);
+            if (!created) return;
+            activities.push({
+                timestamp: created.getTime(),
+                icon: 'fas fa-user-plus',
+                color: 'bg-success',
+                text: `新用戶註冊：${u.username || u.name || '新用戶'}`,
+                time: formatRelative(created)
+            });
+        });
+
+        const knowledge = (database.knowledge || []).filter(k => isAdmin || !k.user_id || k.user_id === userId);
+        knowledge.forEach((k) => {
+            const updated = toDate(k.updated_at || k.created_at);
+            if (!updated) return;
+            activities.push({
+                timestamp: updated.getTime(),
+                icon: 'fas fa-brain',
+                color: 'bg-warning',
+                text: `知識庫更新：${k.question || '內容更新'}`,
+                time: formatRelative(updated)
+            });
+        });
+
+        const convs = (database.chat_history || []).filter(c => {
+            if (isAdmin) return true;
+            if (c.userId && String(c.userId) === String(userId)) return true;
+            return false;
+        });
+        convs.forEach((c) => {
+            const updated = toDate(c.updatedAt || c.updated_at || c.createdAt);
+            if (!updated) return;
+            const platform = c.platform || '對話';
+            activities.push({
+                timestamp: updated.getTime(),
+                icon: 'fas fa-comment',
+                color: 'bg-primary',
+                text: `收到新訊息（${platform}）`,
+                time: formatRelative(updated)
+            });
+        });
+
+        activities.sort((a, b) => b.timestamp - a.timestamp);
+        const result = activities.slice(0, 6).map(({ icon, color, text, time }) => ({ icon, color, text, time }));
+
+        return res.json({ success: true, data: result });
+    } catch (error) {
+        console.error('取得最近活動錯誤:', error);
+        return res.status(500).json({ success: false, error: '無法取得最近活動' });
     }
 });
 
