@@ -441,6 +441,25 @@ app.get('/api/auth/google/client-id', (req, res) => {
     return res.json({ success: !!GOOGLE_CLIENT_ID, client_id: GOOGLE_CLIENT_ID || null });
 });
 
+// 環境檢查（郵件設定用）
+app.get('/api/env-check', (req, res) => {
+    const maskEmail = (email) => {
+        if (!email || typeof email !== 'string') return '未設置';
+        const parts = email.split('@');
+        if (parts.length !== 2 || !parts[0] || !parts[1]) return '未設置';
+        return `${parts[0][0]}***@${parts[1]}`;
+    };
+    return res.json({
+        EMAIL_HOST: EMAIL_HOST || '未設置',
+        EMAIL_PORT,
+        EMAIL_SECURE,
+        EMAIL_USER: maskEmail(EMAIL_ACCOUNT),
+        EMAIL_FROM: EMAIL_FROM_ADDRESS || '未設置',
+        EMAIL_FROM_SOURCE: process.env.EMAIL_FROM ? 'env' : 'default',
+        EMAIL_READY: !!(EMAIL_ACCOUNT && EMAIL_PASSWORD && EMAIL_HOST && EMAIL_PORT)
+    });
+});
+
 // 請求速率限制
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -2048,7 +2067,7 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
     } catch (error) {
         return res.status(500).json({ success: false, error: '無法取得對話列表' });
     }
-});
+        });
 
 // 取得單一對話詳情
 app.get('/api/conversations/:conversationId', authenticateJWT, (req, res) => {
@@ -2559,14 +2578,8 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         // 載入資料庫
         loadDatabase();
         
-        // 獲取 AI 助理配置
-        const aiConfig = database.ai_assistant_config && database.ai_assistant_config[0] ? 
-            database.ai_assistant_config[0] : {
-                assistant_name: 'AI 助理',
-                llm: 'gpt-3.5-turbo',  // 使用正確的 OpenAI 模型名稱
-                use_case: 'customer-service',
-                description: '我是您的智能客服助理，很高興為您服務！'
-            };
+        // 獲取 AI 助理配置（每帳號）
+        const aiConfig = getUserAIConfig(req.staff.id);
 
         // 確保模型名稱有效
         const modelName = aiConfig.llm || 'gpt-3.5-turbo';
@@ -3534,7 +3547,7 @@ app.get('/api/billing/overview', authenticateJWT, (req, res) => {
     } catch (error) {
         console.error('獲取帳務總覽錯誤:', error);
         res.status(500).json({ success: false, error: '獲取帳務總覽失敗' });
-    }
+            }
 });
 
 // 取得可用儲值方案
