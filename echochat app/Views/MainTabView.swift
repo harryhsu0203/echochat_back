@@ -18,42 +18,57 @@ struct MainTabView: View {
     
     var body: some View {
         ZStack {
+            // 背景只忽略 safe area，內容保持在上層
+            Color.primaryBackground
+                .ignoresSafeArea()
+
             // 主要內容區域
-            TabView(selection: $selectedTab) {
-                NavigationView {
-                    HomeView()
+            ZStack {
+                TabView(selection: $selectedTab) {
+                    NavigationView {
+                        HomeView()
+                    }
+                    .tag(0)
+                    
+                    NavigationView {
+                        ConversationListView()
+                    }
+                    .tag(1)
+                    
+                    NavigationView {
+                        ChannelManagementView()
+                    }
+                    .tag(2)
+                    
+                    NavigationView {
+                        AIAssistantConfigView()
+                    }
+                    .tag(3)
+                    
+                    NavigationView {
+                        BillingSystemView()
+                    }
+                    .tag(4)
                 }
-                .tag(0)
+                .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
                 
-                NavigationView {
-                    ConversationListView()
+                // 自定義超緊湊TabBar
+                VStack {
+                    Spacer()
+                    CustomUltraCompactTabBar(selectedTab: $selectedTab)
                 }
-                .tag(1)
-                
-                NavigationView {
-                    ChannelManagementView()
-                }
-                .tag(2)
-                
-                NavigationView {
-                    AIAssistantConfigView()
-                }
-                .tag(3)
-                
-                NavigationView {
-                    BillingSystemView()
-                }
-                .tag(4)
             }
-            .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-            
-            // 自定義超緊湊TabBar
+
+            // Debug 標記：確認內容有 render
             VStack {
+                Text("DEBUG VIEW LOADED")
+                    .foregroundColor(.red)
+                    .padding(.top, 8)
                 Spacer()
-                CustomUltraCompactTabBar(selectedTab: $selectedTab)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .allowsHitTesting(false)
         }
-        .ignoresSafeArea(.keyboard, edges: .bottom)
         .environmentObject(tabManager)
         .onReceive(tabManager.$targetTab) { targetTab in
             if let targetTab = targetTab {
