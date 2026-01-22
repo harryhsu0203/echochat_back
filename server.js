@@ -2147,6 +2147,36 @@ app.post('/api/profile', authenticateJWT, (req, res) => {
     }
 });
 
+// 修改密碼（需登入）
+app.post('/api/change-password', authenticateJWT, async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body || {};
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ success: false, error: '缺少必要欄位' });
+        }
+        if (String(newPassword).length < 6) {
+            return res.status(400).json({ success: false, error: '新密碼長度至少 6 碼' });
+        }
+
+        loadDatabase();
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+
+        const isValid = await bcrypt.compare(String(oldPassword), user.password || '');
+        if (!isValid) {
+            return res.status(400).json({ success: false, error: '目前密碼不正確' });
+        }
+
+        user.password = await bcrypt.hash(String(newPassword), 10);
+        user.updated_at = new Date().toISOString();
+        saveDatabase();
+        return res.json({ success: true });
+    } catch (error) {
+        console.error('修改密碼失敗:', error);
+        return res.status(500).json({ success: false, error: '修改密碼失敗' });
+    }
+});
+
 // 使用者自助升級或儲值 Token（綠界收銀台）
 app.post('/api/upgrade', authenticateJWT, (req, res) => {
     try {
