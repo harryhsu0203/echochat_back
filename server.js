@@ -3142,6 +3142,13 @@ app.get('/api/ai-models', (req, res) => {
                 pricing: '經濟實惠',
                 speed: '快速'
             },
+            'gpt-4': {
+                name: 'GPT-4',
+                description: '經典高品質模型，適合複雜任務與專業場景',
+                features: ['高品質回覆', '強推理能力', '適合複雜任務'],
+                pricing: '高階',
+                speed: '中等'
+            },
             'gpt-4-turbo': {
                 name: 'GPT-4 Turbo',
                 description: '高級模型，適合較複雜的任務與內容生成',
@@ -3164,6 +3171,10 @@ app.get('/api/ai-models', (req, res) => {
                 speed: '快速'
             }
         };
+
+        Object.keys(models).forEach((key) => {
+            models[key].provider = 'OpenAI';
+        });
 
         res.json({
             success: true,
