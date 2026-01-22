@@ -259,18 +259,41 @@ function extractOpenAIText(payload) {
     return typeof chatText === 'string' ? chatText.trim() : '';
 }
 
+function buildResponsesInput(messages) {
+    const systemParts = [];
+    const input = [];
+    (messages || []).forEach((msg) => {
+        if (!msg || typeof msg.content !== 'string') return;
+        if (msg.role === 'system') {
+            systemParts.push(msg.content);
+            return;
+        }
+        const role = msg.role === 'assistant' ? 'assistant' : 'user';
+        input.push({
+            role,
+            content: [{ type: 'input_text', text: msg.content }]
+        });
+    });
+    return {
+        instructions: systemParts.length ? systemParts.join('\n') : undefined,
+        input
+    };
+}
+
 async function requestOpenAIReply({ model, messages, maxTokens, temperature, topP }) {
     const headers = {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
     };
     if (isGpt5Model(model)) {
+        const { instructions, input } = buildResponsesInput(messages);
         const payload = {
             model,
-            input: messages,
+            input: input.length ? input : [{ role: 'user', content: [{ type: 'input_text', text: '' }] }],
             max_output_tokens: maxTokens,
             temperature
         };
+        if (instructions) payload.instructions = instructions;
         if (typeof topP === 'number') payload.top_p = topP;
         const resp = await axios.post('https://api.openai.com/v1/responses', payload, { headers });
         const text = extractOpenAIText(resp.data);
