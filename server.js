@@ -945,6 +945,7 @@ let database = {
     ai_settings: [],
     email_verifications: [], // 儲存電子郵件驗證碼
     password_reset_requests: [], // 儲存密碼重設請求
+    password_change_requests: [], // 儲存修改密碼驗證碼
     line_api_settings: [], // 每位使用者的 LINE Token 設定
     line_bots: [] // 每位使用者的多個 LINE Bot 設定
 };
@@ -968,6 +969,7 @@ const loadDatabase = () => {
                 ai_settings: loadedData.ai_settings || [],
                 email_verifications: loadedData.email_verifications || [],
                 password_reset_requests: loadedData.password_reset_requests || [],
+                password_change_requests: loadedData.password_change_requests || [],
                 line_api_settings: loadedData.line_api_settings || [],
                 line_bots: loadedData.line_bots || []
             };
@@ -2147,11 +2149,42 @@ app.post('/api/profile', authenticateJWT, (req, res) => {
     }
 });
 
+// 發送修改密碼驗證碼（需登入）
+app.post('/api/change-password/request-code', authenticateJWT, async (req, res) => {
+    try {
+        loadDatabase();
+        const user = findStaffById(req.staff.id);
+        if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        if (!user.email) return res.status(400).json({ success: false, error: '請先設定電子郵件' });
+
+        const code = generateVerificationCode();
+        if (!Array.isArray(database.password_change_requests)) {
+            database.password_change_requests = [];
+        }
+        database.password_change_requests = database.password_change_requests.filter(v => v.userId !== user.id);
+        database.password_change_requests.push({
+            userId: user.id,
+            email: user.email,
+            code,
+            expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+            createdAt: new Date().toISOString()
+        });
+        saveDatabase();
+
+        await sendPasswordResetEmail(user.email, code);
+
+        return res.json({ success: true, message: '驗證碼已發送' });
+    } catch (error) {
+        console.error('發送修改密碼驗證碼失敗:', error);
+        return res.status(500).json({ success: false, error: '發送驗證碼失敗' });
+    }
+});
+
 // 修改密碼（需登入）
 app.post('/api/change-password', authenticateJWT, async (req, res) => {
     try {
-        const { oldPassword, newPassword } = req.body || {};
-        if (!oldPassword || !newPassword) {
+        const { oldPassword, newPassword, code } = req.body || {};
+        if (!oldPassword || !newPassword || !code) {
             return res.status(400).json({ success: false, error: '缺少必要欄位' });
         }
         if (String(newPassword).length < 6) {
@@ -2161,6 +2194,17 @@ app.post('/api/change-password', authenticateJWT, async (req, res) => {
         loadDatabase();
         const user = findStaffById(req.staff.id);
         if (!user) return res.status(404).json({ success: false, error: '用戶不存在' });
+        if (!user.email) return res.status(400).json({ success: false, error: '請先設定電子郵件' });
+
+        const verify = (database.password_change_requests || []).find(v => v.userId === user.id && v.code === String(code).trim());
+        if (!verify) {
+            return res.status(400).json({ success: false, error: '驗證碼錯誤或已過期' });
+        }
+        if (new Date() > new Date(verify.expiresAt)) {
+            database.password_change_requests = (database.password_change_requests || []).filter(v => v.userId !== user.id);
+            saveDatabase();
+            return res.status(400).json({ success: false, error: '驗證碼已過期，請重新取得' });
+        }
 
         const isValid = await bcrypt.compare(String(oldPassword), user.password || '');
         if (!isValid) {
@@ -2169,6 +2213,7 @@ app.post('/api/change-password', authenticateJWT, async (req, res) => {
 
         user.password = await bcrypt.hash(String(newPassword), 10);
         user.updated_at = new Date().toISOString();
+        database.password_change_requests = (database.password_change_requests || []).filter(v => v.userId !== user.id);
         saveDatabase();
         return res.json({ success: true });
     } catch (error) {
