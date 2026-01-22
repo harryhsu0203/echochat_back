@@ -26,6 +26,7 @@ struct AIAssistantConfigView: View {
     @AppStorage("aiResponseStyle") private var aiResponseStyle = "正式"
     @AppStorage("aiLanguage") private var aiLanguage = "繁體中文"
     @AppStorage("aiAvatar") private var aiAvatar = "robot"
+    @AppStorage("enableShortReply") private var enableShortReply = false
     
     // 進階設定
     @AppStorage("maxContextLength") private var maxContextLength = 10
@@ -172,7 +173,8 @@ struct AIAssistantConfigView: View {
                             selectedAIModel: $selectedAIModel,
                             maxTokens: $maxTokens,
                             temperature: $temperature,
-                            systemPrompt: $systemPrompt
+                            systemPrompt: $systemPrompt,
+                            enableShortReply: $enableShortReply
                         )
                     case .personality:
                         PersonalitySettingsView(
@@ -244,6 +246,7 @@ struct AIAssistantConfigView: View {
         UserDefaults.standard.set(enableAutoApproval, forKey: "enableAutoApproval")
         UserDefaults.standard.set(approvalThreshold, forKey: "approvalThreshold")
         UserDefaults.standard.set(customInstructions, forKey: "customInstructions")
+        UserDefaults.standard.set(enableShortReply, forKey: "enableShortReply")
         
         // 顯示保存成功提示
         // 這裡可以添加一個簡單的成功提示
@@ -310,6 +313,10 @@ struct AIAssistantPreviewCard: View {
                     .font(.title3)
                     .fontWeight(.semibold)
                     .foregroundColor(.primary)
+
+                Text("供應商：OpenAI")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
                 
                 Text(personality)
                     .font(.caption)
@@ -352,6 +359,7 @@ struct BasicSettingsView: View {
     @Binding var maxTokens: Int
     @Binding var temperature: Double
     @Binding var systemPrompt: String
+    @Binding var enableShortReply: Bool
     
     // 預設AI模型選項
     private let aiModels = [
@@ -386,6 +394,23 @@ struct BasicSettingsView: View {
             // 模型參數
             ConfigSection(title: "回應參數", icon: "slider.horizontal.3") {
                 VStack(spacing: 16) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("簡短回答模式")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("啟用後偏向精簡回覆")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Toggle("", isOn: $enableShortReply)
+                            .labelsHidden()
+                    }
+
                     ConfigSlider(
                         title: "回應長度",
                         value: Binding(
