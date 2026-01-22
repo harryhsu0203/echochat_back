@@ -234,6 +234,63 @@ function estimateChatTokens(message, knowledgeContext, replyMax = 600) {
     return estimateTokens(message) + estimateTokens(knowledgeContext) + replyMax; // 粗估
 }
 
+// OpenAI 回覆請求（支援 gpt-5 系列使用 responses API）
+function isGpt5Model(modelName) {
+    return /^gpt-5(\.|$)/i.test(modelName || '');
+}
+
+function extractOpenAIText(payload) {
+    if (!payload) return '';
+    if (typeof payload.output_text === 'string' && payload.output_text.trim()) {
+        return payload.output_text.trim();
+    }
+    if (Array.isArray(payload.output)) {
+        const parts = [];
+        payload.output.forEach((item) => {
+            (item?.content || []).forEach((c) => {
+                if (typeof c?.text === 'string' && c.text.trim()) {
+                    parts.push(c.text);
+                }
+            });
+        });
+        if (parts.length) return parts.join('').trim();
+    }
+    const chatText = payload.choices?.[0]?.message?.content;
+    return typeof chatText === 'string' ? chatText.trim() : '';
+}
+
+async function requestOpenAIReply({ model, messages, maxTokens, temperature, topP }) {
+    const headers = {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+    };
+    if (isGpt5Model(model)) {
+        const payload = {
+            model,
+            input: messages,
+            max_output_tokens: maxTokens,
+            temperature
+        };
+        if (typeof topP === 'number') payload.top_p = topP;
+        const resp = await axios.post('https://api.openai.com/v1/responses', payload, { headers });
+        const text = extractOpenAIText(resp.data);
+        if (!text) throw new Error('OpenAI 回應格式解析失敗');
+        return text;
+    }
+
+    const payload = {
+        model,
+        messages,
+        max_tokens: maxTokens,
+        temperature
+    };
+    if (typeof topP === 'number') payload.top_p = topP;
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, { headers });
+    const text = extractOpenAIText(resp.data);
+    if (!text) throw new Error('OpenAI 回應格式解析失敗');
+    return text;
+}
+
 // ====== 公開聊天：網站內容快取（避免每次都抓取多頁）======
 let MULTIPAGE_SITE_CONTEXT_CACHE = { text: '', fetchedAt: 0, baseUrl: '' };
 const CONTEXT_TTL_MS = 10 * 60 * 1000; // 10 分鐘
@@ -635,13 +692,12 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
     const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
     if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
 
-    const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+    const aiReply = await requestOpenAIReply({
         model: aiConfig.llm || 'gpt-3.5-turbo',
         messages,
-        max_tokens: 800,
+        maxTokens: 800,
         temperature: 0.6
-    }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' } });
-    const aiReply = openaiResponse.data.choices[0].message.content.trim();
+    });
 
     let remainingNeed = estimatedTokens;
     const cycleRemain = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0);
@@ -703,13 +759,12 @@ async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
     const availableThisCycle = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0) + (user.token_bonus_balance || 0);
     if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
 
-    const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+    const aiReply = await requestOpenAIReply({
         model: aiConfig.llm || 'gpt-3.5-turbo',
         messages,
-        max_tokens: 800,
+        maxTokens: 800,
         temperature: 0.6
-    }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' } });
-    const aiReply = openaiResponse.data.choices[0].message.content.trim();
+    });
 
     let remainingNeed = estimatedTokens;
     const cycleRemain = Math.max(planAllowance - (user.token_used_in_cycle || 0), 0);
@@ -2693,23 +2748,12 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         }
         
         // 調用 OpenAI API
-        const openaiResponse = await axios.post(
-            'https://api.openai.com/v1/chat/completions',
-            {
-                model: aiConfig.llm || 'gpt-3.5-turbo',
-                messages: messages,
-                max_tokens: 1000,
-                temperature: 0.7
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-                    'Content-Type': 'application/json'
-                }
-            }
-        );
-
-        const aiReply = openaiResponse.data.choices[0].message.content.trim();
+        const aiReply = await requestOpenAIReply({
+            model: aiConfig.llm || 'gpt-3.5-turbo',
+            messages,
+            maxTokens: 1000,
+            temperature: 0.7
+        });
 
         // 扣除 tokens（先扣月度，若不足則扣儲值）
         let remainingNeed = estimatedTokens;
@@ -2874,20 +2918,13 @@ app.post('/api/public-chat', async (req, res) => {
             { role: 'user', content: message }
         ];
 
-        const openaiResponse = await axios.post('https://api.openai.com/v1/chat/completions', {
+        const aiReply = await requestOpenAIReply({
             model: process.env.PUBLIC_CHAT_MODEL || 'gpt-4o-mini',
             messages: chatMessages,
-            max_tokens: 600,
+            maxTokens: 600,
             temperature: 0.2,
-            top_p: 0.9
-        }, {
-            headers: {
-                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                'Content-Type': 'application/json'
-            }
+            topP: 0.9
         });
-
-        const aiReply = openaiResponse.data.choices?.[0]?.message?.content?.trim() || '目前無法提供回覆，請稍後再試。';
         res.json({ success: true, reply: aiReply });
     } catch (error) {
         console.error('公開聊天錯誤(子模組):', error.response?.data || error.message);
