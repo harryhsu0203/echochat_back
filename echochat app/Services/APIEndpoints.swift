@@ -50,4 +50,5 @@ struct APIEndpoints {
     static let aiAssistantConfig = "/api/ai-assistant-config"
     static let aiAssistantConfigReset = "/api/ai-assistant-config/reset"
     static let aiModels = "/api/ai-models"
+    static let aiSettings = "/api/ai-settings"
 } 

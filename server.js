@@ -629,6 +629,28 @@ function getUserAIConfig(userId) {
     return (found && found.config) ? found.config : fallback;
 }
 
+// 取得使用者 AI 設定（預設模型/升級模型/自動升級）
+function getDefaultAISettings() {
+    return {
+        default_model: 'gpt-5.0',
+        fallback_model: 'gpt-4.1',
+        auto_escalate_enabled: true,
+        escalate_keywords: ['退款', '合約', '發票', '抱怨', '故障'],
+        updated_at: new Date().toISOString()
+    };
+}
+
+function getUserAISettings(userId) {
+    loadDatabase();
+    if (!Array.isArray(database.ai_settings)) database.ai_settings = [];
+    const found = database.ai_settings.find(s => s.user_id === userId);
+    if (found && found.settings) return found.settings;
+    const defaultSettings = getDefaultAISettings();
+    database.ai_settings.push({ user_id: userId, settings: defaultSettings });
+    saveDatabase();
+    return defaultSettings;
+}
+
 // 依使用者與平台取得頻道與解密後的憑證
 function findUserChannel(userId, platform) {
     loadDatabase();
@@ -920,6 +942,7 @@ let database = {
     chat_history: [],
     channels: [],
     ai_assistant_configs: [],
+    ai_settings: [],
     email_verifications: [], // 儲存電子郵件驗證碼
     password_reset_requests: [], // 儲存密碼重設請求
     line_api_settings: [], // 每位使用者的 LINE Token 設定
@@ -942,6 +965,7 @@ const loadDatabase = () => {
                 chat_history: loadedData.chat_history || [],
                 channels: loadedData.channels || [],
                 ai_assistant_configs: loadedData.ai_assistant_configs || [],
+                ai_settings: loadedData.ai_settings || [],
                 email_verifications: loadedData.email_verifications || [],
                 password_reset_requests: loadedData.password_reset_requests || [],
                 line_api_settings: loadedData.line_api_settings || [],
@@ -2554,6 +2578,56 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     } catch (error) {
         console.error('重置 AI 助理配置錯誤:', error);
         res.status(500).json({ success: false, error: '重置配置失敗' });
+    }
+});
+
+// AI 設定（預設模型/升級模型/關鍵字）
+app.get('/api/ai-settings', authenticateJWT, (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const settings = getUserAISettings(userId);
+        res.json({ success: true, settings });
+    } catch (error) {
+        console.error('取得 AI 設定錯誤:', error);
+        res.status(500).json({ success: false, error: '取得 AI 設定失敗' });
+    }
+});
+
+app.put('/api/ai-settings', authenticateJWT, (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const payload = (req.body && req.body.settings) ? req.body.settings : (req.body || {});
+        const defaultSettings = getDefaultAISettings();
+
+        const settings = {
+            default_model: typeof payload.default_model === 'string' && payload.default_model.trim()
+                ? payload.default_model.trim()
+                : defaultSettings.default_model,
+            fallback_model: typeof payload.fallback_model === 'string' && payload.fallback_model.trim()
+                ? payload.fallback_model.trim()
+                : null,
+            auto_escalate_enabled: typeof payload.auto_escalate_enabled === 'boolean'
+                ? payload.auto_escalate_enabled
+                : defaultSettings.auto_escalate_enabled,
+            escalate_keywords: Array.isArray(payload.escalate_keywords)
+                ? payload.escalate_keywords.filter(k => typeof k === 'string' && k.trim()).map(k => k.trim())
+                : defaultSettings.escalate_keywords,
+            updated_at: new Date().toISOString()
+        };
+
+        loadDatabase();
+        if (!Array.isArray(database.ai_settings)) database.ai_settings = [];
+        const idx = database.ai_settings.findIndex(s => s.user_id === userId);
+        if (idx === -1) {
+            database.ai_settings.push({ user_id: userId, settings });
+        } else {
+            database.ai_settings[idx].settings = settings;
+        }
+        saveDatabase();
+        res.json({ success: true, settings });
+    } catch (error) {
+        console.error('更新 AI 設定錯誤:', error);
+        res.status(500).json({ success: false, error: '更新 AI 設定失敗' });
     }
 });
 

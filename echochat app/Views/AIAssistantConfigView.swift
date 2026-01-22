@@ -27,6 +27,10 @@ struct AIAssistantConfigView: View {
     @AppStorage("aiLanguage") private var aiLanguage = "繁體中文"
     @AppStorage("aiAvatar") private var aiAvatar = "robot"
     @AppStorage("enableShortReply") private var enableShortReply = false
+    @AppStorage("aiDefaultModel") private var aiDefaultModel = "gpt-5.0"
+    @AppStorage("aiFallbackModel") private var aiFallbackModel = ""
+    @AppStorage("aiAutoEscalateEnabled") private var aiAutoEscalateEnabled = true
+    @AppStorage("aiEscalateKeywords") private var aiEscalateKeywords = "退款, 合約, 發票, 抱怨, 故障"
     
     // 進階設定
     @AppStorage("maxContextLength") private var maxContextLength = 10
@@ -44,6 +48,8 @@ struct AIAssistantConfigView: View {
     @State private var showingTemplatePicker = false
     @State private var showingCustomInstructions = false
     @State private var customInstructions = ""
+    @StateObject private var aiSettingsService = AISettingsAPIService()
+    @State private var hasLoadedAISettings = false
     
     enum ConfigTab: String, CaseIterable {
         case service = "服務設定"
@@ -174,7 +180,11 @@ struct AIAssistantConfigView: View {
                             maxTokens: $maxTokens,
                             temperature: $temperature,
                             systemPrompt: $systemPrompt,
-                            enableShortReply: $enableShortReply
+                            enableShortReply: $enableShortReply,
+                            defaultModel: $aiDefaultModel,
+                            fallbackModel: $aiFallbackModel,
+                            autoEscalateEnabled: $aiAutoEscalateEnabled,
+                            escalateKeywordsText: $aiEscalateKeywords
                         )
                     case .personality:
                         PersonalitySettingsView(
@@ -225,6 +235,9 @@ struct AIAssistantConfigView: View {
         } message: {
             Text(testResult)
         }
+        .task {
+            await loadAISettings()
+        }
     }
     
     private func saveSettings() {
@@ -247,9 +260,48 @@ struct AIAssistantConfigView: View {
         UserDefaults.standard.set(approvalThreshold, forKey: "approvalThreshold")
         UserDefaults.standard.set(customInstructions, forKey: "customInstructions")
         UserDefaults.standard.set(enableShortReply, forKey: "enableShortReply")
+        UserDefaults.standard.set(aiDefaultModel, forKey: "aiDefaultModel")
+        UserDefaults.standard.set(aiFallbackModel, forKey: "aiFallbackModel")
+        UserDefaults.standard.set(aiAutoEscalateEnabled, forKey: "aiAutoEscalateEnabled")
+        UserDefaults.standard.set(aiEscalateKeywords, forKey: "aiEscalateKeywords")
         
         // 顯示保存成功提示
         // 這裡可以添加一個簡單的成功提示
+
+        let keywords = parseKeywords(aiEscalateKeywords)
+        let settings = AISettings(
+            defaultModel: aiDefaultModel,
+            fallbackModel: aiFallbackModel.isEmpty ? nil : aiFallbackModel,
+            autoEscalateEnabled: aiAutoEscalateEnabled,
+            escalateKeywords: keywords
+        )
+        Task {
+            try? await aiSettingsService.updateSettings(settings)
+        }
+    }
+
+    private func parseKeywords(_ text: String) -> [String] {
+        let separators = CharacterSet(charactersIn: ",，\n")
+        return text
+            .components(separatedBy: separators)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private func loadAISettings() async {
+        guard !hasLoadedAISettings else { return }
+        hasLoadedAISettings = true
+        do {
+            let settings = try await aiSettingsService.fetchSettings()
+            await MainActor.run {
+                aiDefaultModel = settings.defaultModel
+                aiFallbackModel = settings.fallbackModel ?? ""
+                aiAutoEscalateEnabled = settings.autoEscalateEnabled
+                aiEscalateKeywords = settings.escalateKeywords.joined(separator: ", ")
+            }
+        } catch {
+            // 若讀取失敗，仍保留本地設定
+        }
     }
 }
 
@@ -360,33 +412,162 @@ struct BasicSettingsView: View {
     @Binding var temperature: Double
     @Binding var systemPrompt: String
     @Binding var enableShortReply: Bool
+    @Binding var defaultModel: String
+    @Binding var fallbackModel: String
+    @Binding var autoEscalateEnabled: Bool
+    @Binding var escalateKeywordsText: String
     
-    // 預設AI模型選項
-    private let aiModels = [
-        ("GPT-4.1", "最新最強大的AI模型，理解力和創造力最佳", "brain.head.profile", "purple"),
-        ("GPT-4", "高級AI模型，適合複雜任務和創意工作", "cpu", "blue"),
-        ("GPT-4 Mini", "輕量級GPT-4模型，速度快且成本較低", "bolt", "green"),
-        ("GPT-3.5 Turbo", "平衡性能和速度的經典模型", "gear", "orange"),
-        ("Claude-3", "擅長分析和寫作的AI模型", "text.quote", "teal")
+    // 模型方案清單
+    private let modelsCatalog: [ModelCatalogItem] = [
+        ModelCatalogItem(
+            id: "gpt-5.2",
+            displayName: "GPT-5.2",
+            category: .cost,
+            shortDesc: "大量一般客服，回覆快、成本低",
+            bestFor: ["大量一般客服", "快速 FAQ 回覆", "高頻詢問處理"],
+            cautions: ["複雜/高風險議題建議升級"],
+            priceTier: "低",
+            tags: ["推薦", "省成本"],
+            detail: "適合處理大量一般客服訊息，回覆速度快、成本低。遇到合約/退款/爭議等高風險問題建議升級模型。"
+        ),
+        ModelCatalogItem(
+            id: "gpt-5.1",
+            displayName: "GPT-5.1",
+            category: .cost,
+            shortDesc: "穩定高效、通用客服場景",
+            bestFor: ["一般客服", "產品諮詢", "大量訊息處理"],
+            cautions: ["高風險議題建議升級"],
+            priceTier: "中低",
+            tags: ["省成本"],
+            detail: "適合主流客服需求，回覆穩定、成本可控。遇到複雜問題可搭配升級模型。"
+        ),
+        ModelCatalogItem(
+            id: "gpt-5.0",
+            displayName: "GPT-5.0",
+            category: .cost,
+            shortDesc: "一般客服與大量訊息（省成本、回覆快）",
+            bestFor: ["大量一般客服", "基礎問題處理"],
+            cautions: ["複雜/高風險議題建議升級"],
+            priceTier: "低",
+            tags: ["省成本", "高速"],
+            detail: "適合一般客服與大量訊息處理。遇到合約/退款/爭議/技術問題時建議升級模型。"
+        ),
+        ModelCatalogItem(
+            id: "gpt-4.1",
+            displayName: "GPT-4.1",
+            category: .quality,
+            shortDesc: "合約/退款/技術等複雜問題",
+            bestFor: ["合約", "退款爭議", "技術問題", "文件理解"],
+            cautions: ["成本較高"],
+            priceTier: "高",
+            tags: ["高品質"],
+            detail: "高推理能力與穩定性，適合高風險或高複雜度客服場景，但成本較高。"
+        ),
+        ModelCatalogItem(
+            id: "gpt-4o",
+            displayName: "GPT-4o",
+            category: .quality,
+            shortDesc: "高品質回覆、複雜問題",
+            bestFor: ["合約", "退款爭議", "技術問題", "高品質回覆"],
+            cautions: ["成本較高"],
+            priceTier: "高",
+            tags: ["高品質"],
+            detail: "適合高品質回覆與複雜問題處理，成本較高。"
+        ),
+        ModelCatalogItem(
+            id: "gpt-5.x-code",
+            displayName: "GPT-5.x Code",
+            category: .code,
+            shortDesc: "API 串接、除錯、程式生成",
+            bestFor: ["API 串接", "除錯", "程式生成", "工程問題排除"],
+            cautions: ["不建議處理 UI/版面問題", "不建議高風險客服"],
+            priceTier: "高",
+            tags: ["工程", "高推理"],
+            detail: "適合工程任務（API 串接、除錯、程式生成），不建議用來處理 UI/版面或高風險客服問題。"
+        )
     ]
     
     var body: some View {
         VStack(spacing: 20) {
-            // AI模型選擇
-            ConfigSection(title: "AI模型選擇", icon: "brain.head.profile") {
-                VStack(spacing: 12) {
-                    ForEach(aiModels, id: \.0) { model in
-                        AIModelCard(
-                            title: model.0,
-                            description: model.1,
-                            icon: model.2,
-                            color: Color(model.3),
-                            isSelected: selectedAIModel == model.0
-                        ) {
-                            selectedAIModel = model.0
-                            // 根據選擇的模型更新系統提示詞
-                            updateSystemPrompt(for: model.0)
+            // 模型方案
+            ConfigSection(title: "模型方案", icon: "brain.head.profile") {
+                VStack(spacing: 16) {
+                    ForEach(ModelCategory.allCases, id: \.self) { category in
+                        let items = modelsCatalog.filter { $0.category == category }
+                        if !items.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text(category.displayName)
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(category.color)
+
+                                ForEach(items) { item in
+                                    ModelCatalogCard(item: item)
+                                }
+                            }
                         }
+                    }
+                }
+            }
+
+            // 模型選擇
+            ConfigSection(title: "模型選擇", icon: "checkmark.circle") {
+                VStack(spacing: 16) {
+                    HStack {
+                        Text("預設模型")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                        Picker("", selection: $defaultModel) {
+                            ForEach(modelsCatalog) { item in
+                                Text(item.displayName).tag(item.id)
+                            }
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                    }
+
+                    HStack {
+                        Text("升級模型（可選）")
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                        Spacer()
+                        Picker("", selection: $fallbackModel) {
+                            Text("不啟用").tag("")
+                            ForEach(modelsCatalog) { item in
+                                Text(item.displayName).tag(item.id)
+                            }
+                        }
+                        .pickerStyle(MenuPickerStyle())
+                    }
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("高風險自動升級")
+                                .font(.subheadline)
+                                .fontWeight(.medium)
+                                .foregroundColor(.primary)
+                            Text("遇到關鍵字自動切換到升級模型")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $autoEscalateEnabled)
+                            .labelsHidden()
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("關鍵字（逗號分隔）")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        TextEditor(text: $escalateKeywordsText)
+                            .frame(minHeight: 70)
+                            .padding(8)
+                            .background(Color(.systemGray6))
+                            .cornerRadius(8)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color(.systemGray4), lineWidth: 1)
+                            )
                     }
                 }
             }
@@ -451,11 +632,146 @@ struct BasicSettingsView: View {
                 }
             }
         }
+        .onAppear {
+            if selectedAIModel != defaultModel {
+                selectedAIModel = defaultModel
+            }
+        }
+        .onChange(of: defaultModel) { _, newValue in
+            selectedAIModel = newValue
+        }
     }
     
     private func updateSystemPrompt(for model: String) {
         // 所有模型都使用相同的客服提示詞，因為模型本身已經決定了AI的能力
         systemPrompt = "你是一個專業的客服代表，請用友善、專業的態度回答客戶問題。根據客戶的需求提供準確、有用的資訊，並確保客戶滿意度。"
+    }
+}
+
+// MARK: - 模型方案資料
+enum ModelCategory: CaseIterable {
+    case cost
+    case quality
+    case code
+    
+    var displayName: String {
+        switch self {
+        case .cost:
+            return "省成本／高速（大量一般客服）"
+        case .quality:
+            return "高品質／複雜問題"
+        case .code:
+            return "程式／串接／Debug"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .cost:
+            return .green
+        case .quality:
+            return .orange
+        case .code:
+            return .blue
+        }
+    }
+}
+
+struct ModelCatalogItem: Identifiable {
+    let id: String
+    let displayName: String
+    let category: ModelCategory
+    let shortDesc: String
+    let bestFor: [String]
+    let cautions: [String]
+    let priceTier: String
+    let tags: [String]
+    let detail: String
+}
+
+struct ModelCatalogCard: View {
+    let item: ModelCatalogItem
+    @State private var isExpanded = false
+    
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(item.displayName)
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.primary)
+                    
+                    Text(item.shortDesc)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Spacer()
+                
+                HStack(spacing: 6) {
+                    ForEach(item.tags, id: \.self) { tag in
+                        Text(tag)
+                            .font(.caption2)
+                            .foregroundColor(item.category.color)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(item.category.color.opacity(0.12))
+                            .cornerRadius(8)
+                    }
+                }
+            }
+            
+            DisclosureGroup(isExpanded: $isExpanded) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(item.detail)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    
+                    if !item.bestFor.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("建議使用情境")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            ForEach(item.bestFor, id: \.self) { text in
+                                Text("• \(text)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    
+                    if !item.cautions.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("注意事項")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            ForEach(item.cautions, id: \.self) { text in
+                                Text("• \(text)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    
+                    Text("成本等級：\(item.priceTier)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.top, 6)
+            } label: {
+                Text(isExpanded ? "收合詳情" : "展開詳情")
+                    .font(.caption)
+                    .foregroundColor(item.category.color)
+            }
+        }
+        .padding(12)
+        .background(Color(.systemBackground))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color(.systemGray4), lineWidth: 1)
+        )
     }
 }
 
