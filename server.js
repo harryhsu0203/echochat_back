@@ -540,7 +540,7 @@ function getUserAIConfig(userId) {
     loadDatabase();
     const fallback = {
         assistant_name: 'AI 助理',
-        llm: 'gpt-3.5-turbo',
+        llm: 'gpt-4o-mini',
         use_case: 'customer-service',
         description: '我是您的智能客服助理，很高興為您服務！'
     };
@@ -2348,7 +2348,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         const found = database.ai_assistant_configs.find(c => c.user_id === userId);
         const defaultConfig = {
             assistant_name: 'AI 助理',
-                            llm: 'gpt-3.5-turbo',
+            llm: 'gpt-4o-mini',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
             industry: 'general',
@@ -2449,7 +2449,7 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     try {
         const defaultConfig = {
             assistant_name: 'AI 助理',
-                            llm: 'gpt-3.5-turbo',
+            llm: 'gpt-4o-mini',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
             industry: 'general',
@@ -2585,7 +2585,17 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         const modelName = aiConfig.llm || 'gpt-3.5-turbo';
         
         // 驗證模型名稱
-        const validModels = ['gpt-3.5-turbo', 'gpt-4-turbo', 'gpt-4', 'gpt-3.5-turbo-16k'];
+        const validModels = [
+            'gpt-4.1',
+            'gpt-4.1-mini',
+            'gpt-4.1-nano',
+            'gpt-4o',
+            'gpt-4o-mini',
+            'gpt-4-turbo',
+            'gpt-4',
+            'gpt-3.5-turbo',
+            'gpt-3.5-turbo-16k'
+        ];
         if (!validModels.includes(modelName)) {
             console.warn(`無效的模型名稱: ${modelName}，使用預設值 gpt-3.5-turbo`);
             aiConfig.llm = 'gpt-3.5-turbo';
@@ -2921,62 +2931,78 @@ app.get('/api/health', (req, res) => {
 
 // AI 模型列表端點 - 不需要認證
 app.get('/api/ai-models', (req, res) => {
-  try {
-    // 使用預設模型列表（因為沒有OpenAI API金鑰）
-    const models = [
-      {
-        id: 'gpt-4o',
-        name: 'GPT-4o',
-        description: '最新最強大的AI模型，理解力和創造力最佳',
-        maxTokens: 4000,
-        isAvailable: true,
-        category: 'premium'
-      },
-      {
-        id: 'gpt-3.5-turbo',
-        name: 'GPT-3.5 Turbo',
-        description: '輕量級GPT模型，速度快且成本較低',
-        maxTokens: 2000,
-        isAvailable: true,
-        category: 'standard'
-      },
-      {
-        id: 'gpt-4-turbo',
-        name: 'GPT-4 Turbo',
-        description: '高級AI模型，適合複雜任務和創意工作',
-        maxTokens: 4000,
-        isAvailable: true,
-        category: 'premium'
-      },
-      {
-        id: 'gpt-3.5-turbo',
-        name: 'GPT-3.5 Turbo',
-        description: '平衡性能和速度的經典模型',
-        maxTokens: 2000,
-        isAvailable: true,
-        category: 'standard'
-      },
-      {
-        id: 'claude-3-5-sonnet',
-        name: 'Claude 3.5 Sonnet',
-        description: '擅長分析和寫作的AI模型',
-        maxTokens: 4000,
-        isAvailable: true,
-        category: 'premium'
-      }
-    ];
+    try {
+        const models = {
+            'gpt-4.1': {
+                name: 'GPT-4.1',
+                description: '最新旗艦模型，適合高品質與高準確度場景',
+                features: ['高準確度', '強推理能力', '多語言支援', '適合複雜任務'],
+                pricing: '高階',
+                speed: '中等'
+            },
+            'gpt-4.1-mini': {
+                name: 'GPT-4.1 Mini',
+                description: '高效能與成本平衡的新版模型，適合主流客服需求',
+                features: ['高性價比', '穩定回覆', '多語言支援', '適合日常對話'],
+                pricing: '中等',
+                speed: '快速'
+            },
+            'gpt-4.1-nano': {
+                name: 'GPT-4.1 Nano',
+                description: '輕量快速的新模型，適合大量即時回覆',
+                features: ['極速回應', '成本最低', '多語言支援'],
+                pricing: '經濟實惠',
+                speed: '極速'
+            },
+            'gpt-4o': {
+                name: 'GPT-4o',
+                description: '高品質通用模型，適合需要更佳理解力的場景',
+                features: ['高品質回覆', '多語言支援', '通用能力強'],
+                pricing: '高階',
+                speed: '中等'
+            },
+            'gpt-4o-mini': {
+                name: 'GPT-4o Mini',
+                description: '快速且經濟實惠的對話體驗，適合一般客服需求',
+                features: ['快速回應', '成本效益高', '支援多語言', '適合日常對話'],
+                pricing: '經濟實惠',
+                speed: '快速'
+            },
+            'gpt-4-turbo': {
+                name: 'GPT-4 Turbo',
+                description: '高級模型，適合較複雜的任務與內容生成',
+                features: ['強推理能力', '高準確度', '適合複雜任務'],
+                pricing: '高階',
+                speed: '中等'
+            },
+            'gpt-3.5-turbo': {
+                name: 'GPT-3.5 Turbo',
+                description: '經典入門模型，速度快且成本較低',
+                features: ['快速回應', '成本效益高', '穩定可靠'],
+                pricing: '經濟實惠',
+                speed: '快速'
+            },
+            'gpt-3.5-turbo-16k': {
+                name: 'GPT-3.5 Turbo 16K',
+                description: '支援更長上下文的 3.5 版本',
+                features: ['較長上下文', '成本較低', '穩定可靠'],
+                pricing: '經濟實惠',
+                speed: '快速'
+            }
+        };
 
         res.json({
             success: true,
-      message: 'AI 模型列表獲取成功',
-      data: models
+            message: 'AI 模型列表獲取成功',
+            models,
+            data: models
         });
     } catch (error) {
-    console.error('獲取 AI 模型列表錯誤:', error);
+        console.error('獲取 AI 模型列表錯誤:', error);
         res.status(500).json({
             success: false,
-      message: '獲取 AI 模型列表失敗',
-      error: error.message
+            message: '獲取 AI 模型列表失敗',
+            error: error.message
         });
     }
 });
