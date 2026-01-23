@@ -108,7 +108,7 @@ app.disable('x-powered-by');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const SESSION_TIMEOUT_MINUTES = Math.max(parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15, 1);
 const JWT_EXPIRES_IN = `${SESSION_TIMEOUT_MINUTES}m`;
-const MANUAL_REPLY_IDLE_MINUTES = Math.max(parseInt(process.env.MANUAL_REPLY_IDLE_MINUTES || '10', 10) || 10, 1);
+const MANUAL_REPLY_IDLE_MINUTES = Math.max(parseInt(process.env.MANUAL_REPLY_IDLE_MINUTES || '2', 10) || 2, 1);
 const MANUAL_REPLY_IDLE_MS = MANUAL_REPLY_IDLE_MINUTES * 60 * 1000;
 // 綠界金流設定
 const ECPAY_MODE = process.env.ECPAY_MODE || 'Stage'; // 'Stage' or 'Prod'
@@ -665,21 +665,22 @@ function findUserChannel(userId, platform) {
 
 // 取得 LINE 憑證（優先從記憶體快取，提升效能並避免解密問題）
 function getLineCredentials(userId) {
+    const key = String(userId);
     // 優先從記憶體快取取得（保存時已放入明文）
-    if (lineAPISettings[userId] && lineAPISettings[userId].channelAccessToken && lineAPISettings[userId].channelSecret) {
+    if (lineAPISettings[key] && lineAPISettings[key].channelAccessToken && lineAPISettings[key].channelSecret) {
         return {
-            channelAccessToken: lineAPISettings[userId].channelAccessToken,
-            channelSecret: lineAPISettings[userId].channelSecret
+            channelAccessToken: lineAPISettings[key].channelAccessToken,
+            channelSecret: lineAPISettings[key].channelSecret
         };
     }
     // 若快取不存在，從資料庫讀取並解密
     loadDatabase();
-    const rec = (database.line_api_settings || []).find(r => r.user_id === userId);
+    const rec = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
     if (!rec) return null;
     const token = decryptSensitive(rec.channel_access_token) || rec.channel_access_token || '';
     const secret = decryptSensitive(rec.channel_secret) || rec.channel_secret || '';
     // 同時更新快取
-    lineAPISettings[userId] = { channelAccessToken: token, channelSecret: secret };
+    lineAPISettings[key] = { channelAccessToken: token, channelSecret: secret };
     return { channelAccessToken: token, channelSecret: secret };
 }
 
@@ -4828,7 +4829,14 @@ function maybeRestoreAutoReply(conversation) {
     const manualSince = conversation.lastManualReplyAt || conversation.manualModeSince || getConversationLastMessageTimestamp(conversation);
     if (!manualSince) return false;
     const sinceMs = Date.parse(manualSince);
-    if (Number.isNaN(sinceMs)) return false;
+    if (Number.isNaN(sinceMs)) {
+        conversation.autoReplyEnabled = true;
+        conversation.autoReplyRestoredAt = new Date().toISOString();
+        conversation.manualModeRestoredReason = 'invalid_manual_timestamp';
+        delete conversation.manualModeSince;
+        delete conversation.lastManualReplyAt;
+        return true;
+    }
     if (Date.now() - sinceMs < MANUAL_REPLY_IDLE_MS) return false;
 
     conversation.autoReplyEnabled = true;
@@ -4927,15 +4935,17 @@ async function handleLineMessage(event, userId) {
         });
         
         // 取得用戶資料（名稱與照片）
-        let displayName = sourceUserId;
+        let displayName = 'LINE 使用者';
         let pictureUrl = null;
+        let profileLoaded = false;
         try {
             const creds = getLineCredentials(userId);
             if (creds && creds.channelAccessToken) {
                 const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
                 const profile = await client.getProfile(sourceUserId);
-                displayName = profile.displayName || sourceUserId;
+                displayName = profile.displayName || displayName;
                 pictureUrl = profile.pictureUrl || null;
+                profileLoaded = true;
             }
         } catch (profileErr) {
             console.warn('無法取得 LINE 用戶資料:', profileErr.message);
@@ -4960,9 +4970,11 @@ async function handleLineMessage(event, userId) {
             };
             database.chat_history.push(conv);
         } else {
-            // 更新客戶名稱與照片（每次互動都更新）
-            conv.customerName = displayName;
-            conv.customerPicture = pictureUrl;
+            // 更新客戶名稱與照片（僅在成功取得 profile 時更新）
+            if (profileLoaded) {
+                conv.customerName = displayName;
+                conv.customerPicture = pictureUrl;
+            }
             conv.customerLineId = sourceUserId;
             if (!conv.userId) conv.userId = parseInt(userId);
         }
@@ -5469,8 +5481,9 @@ async function handleLineBotMessage(event, bot) {
         console.log('💬 Bot 收到訊息:', messageContent || message.type, 'from:', sourceUserId, 'Bot:', bot.name);
         
         // 取得用戶資料
-        let displayName = sourceUserId;
+        let displayName = 'LINE 使用者';
         let pictureUrl = null;
+        let profileLoaded = false;
         try {
             const token = decryptSensitive(bot.channel_access_token);
             const secret = decryptSensitive(bot.channel_secret);
@@ -5478,8 +5491,9 @@ async function handleLineBotMessage(event, bot) {
             if (token && secret) {
                 const client = new Client({ channelAccessToken: token, channelSecret: secret });
                 const profile = await client.getProfile(sourceUserId);
-                displayName = profile.displayName || sourceUserId;
+                displayName = profile.displayName || displayName;
                 pictureUrl = profile.pictureUrl || null;
+                profileLoaded = true;
             }
         } catch (profileErr) {
             console.warn('無法取得 LINE 用戶資料:', profileErr.message);
@@ -5509,8 +5523,10 @@ async function handleLineBotMessage(event, bot) {
             // 更新 Bot 的對話計數
             bot.conversation_count = (bot.conversation_count || 0) + 1;
         } else {
-            conv.customerName = displayName;
-            conv.customerPicture = pictureUrl;
+            if (profileLoaded) {
+                conv.customerName = displayName;
+                conv.customerPicture = pictureUrl;
+            }
             conv.customerLineId = sourceUserId;
             if (!conv.userId) conv.userId = bot.user_id;
         }
