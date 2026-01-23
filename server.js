@@ -4952,26 +4952,40 @@ async function handleLineMessage(event, userId) {
         
         // 只有在有回覆內容時才回推
         if (replyText) {
+            const aiMessage = {
+                role: 'assistant',
+                content: replyText,
+                timestamp: new Date().toISOString(),
+                isAutoReply: true,
+                deliveryStatus: 'pending'
+            };
+            conv.messages.push(aiMessage);
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+
             try {
-            const creds = getLineCredentials(userId);
+                const creds = getLineCredentials(userId);
                 console.log('📡 取得憑證:', creds ? '有' : '無');
-            if (creds && creds.channelAccessToken) {
+                if (creds && creds.channelAccessToken) {
                     console.log('   Token 長度:', creds.channelAccessToken.length);
-                const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+                    const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
                     await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
                     console.log('✅ LINE 訊息回推成功');
-                    
-                    // 將 AI 回覆加入對話記錄
-                    conv.messages.push({ role: 'assistant', content: replyText, timestamp: new Date().toISOString() });
-                    conv.updatedAt = new Date().toISOString();
-                    saveDatabase();
-                    console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
+                    aiMessage.deliveryStatus = 'sent';
                 } else {
                     console.warn('❌ 無 LINE 憑證，無法回推');
+                    aiMessage.deliveryStatus = 'skipped';
+                    aiMessage.deliveryError = 'missing_credentials';
                 }
             } catch (pushErr) {
                 console.error('❌ LINE 回推失敗:', pushErr.message);
                 console.error('   詳細:', pushErr.response?.data || pushErr.stack);
+                aiMessage.deliveryStatus = 'failed';
+                aiMessage.deliveryError = pushErr.message || 'push_failed';
+            } finally {
+                conv.updatedAt = new Date().toISOString();
+                saveDatabase();
+                console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
             }
         } else {
             console.log('📝 無回覆內容，不進行回推');
@@ -5434,21 +5448,41 @@ async function handleLineBotMessage(event, bot) {
                 const { reply } = await generateAIReplyWithHistory(bot.user_id, conv.messages, messageContent || '');
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 
+                const aiMessage = {
+                    role: 'assistant',
+                    content: reply,
+                    timestamp: new Date().toISOString(),
+                    isAutoReply: true,
+                    deliveryStatus: 'pending'
+                };
+                conv.messages.push(aiMessage);
+                conv.updatedAt = new Date().toISOString();
+                saveDatabase();
+                
                 // 推送到 LINE
                 const token = decryptSensitive(bot.channel_access_token);
                 const secret = decryptSensitive(bot.channel_secret);
                 
                 if (token && secret) {
-                    const client = new Client({ channelAccessToken: token, channelSecret: secret });
-                    await client.pushMessage(sourceUserId, { type: 'text', text: reply });
-                    console.log('✅ LINE Bot 訊息回推成功');
-                    
-                    // 將 AI 回覆加入對話記錄
-            conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
-                    conv.updatedAt = new Date().toISOString();
-            saveDatabase();
+                    try {
+                        const client = new Client({ channelAccessToken: token, channelSecret: secret });
+                        await client.pushMessage(sourceUserId, { type: 'text', text: reply });
+                        console.log('✅ LINE Bot 訊息回推成功');
+                        aiMessage.deliveryStatus = 'sent';
+                    } catch (pushErr) {
+                        console.warn('❌ LINE Bot 訊息回推失敗:', pushErr.message);
+                        aiMessage.deliveryStatus = 'failed';
+                        aiMessage.deliveryError = pushErr.message || 'push_failed';
+                    }
+                } else {
+                    console.warn('❌ 缺少 LINE Bot 憑證，無法回推');
+                    aiMessage.deliveryStatus = 'skipped';
+                    aiMessage.deliveryError = 'missing_credentials';
                 }
-        } catch (e) {
+                
+                conv.updatedAt = new Date().toISOString();
+                saveDatabase();
+            } catch (e) {
                 console.warn('❌ 生成 AI 回覆失敗:', e.message);
             }
         } else {
