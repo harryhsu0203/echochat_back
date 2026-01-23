@@ -4839,16 +4839,71 @@ function maybeRestoreAutoReply(conversation) {
     return true;
 }
 
+function normalizeLineMessage(lineMessage) {
+    const type = String(lineMessage?.type || '').toLowerCase();
+    if (type === 'text') {
+        return { type: 'text', content: lineMessage.text || '' };
+    }
+    if (type === 'sticker') {
+        const stickerId = lineMessage.stickerId || null;
+        const packageId = lineMessage.packageId || null;
+        const stickerUrl = stickerId
+            ? `https://stickershop.line-scdn.net/stickershop/v1/sticker/${stickerId}/android/sticker.png`
+            : null;
+        return {
+            type: 'sticker',
+            content: '[貼圖]',
+            stickerId,
+            stickerPackageId: packageId,
+            stickerResourceType: lineMessage.stickerResourceType || null,
+            stickerUrl
+        };
+    }
+    if (type === 'image') {
+        return { type: 'image', content: '[圖片]' };
+    }
+    if (type === 'video') {
+        return { type: 'video', content: '[影片]' };
+    }
+    if (type === 'audio') {
+        return { type: 'audio', content: '[語音]' };
+    }
+    if (type === 'file') {
+        const fileName = lineMessage.fileName || '';
+        const fileSize = lineMessage.fileSize || null;
+        return {
+            type: 'file',
+            content: `[檔案]${fileName ? ' ' + fileName : ''}`,
+            fileName: fileName || null,
+            fileSize
+        };
+    }
+    if (type === 'location') {
+        const address = lineMessage.address || '';
+        return {
+            type: 'location',
+            content: `[位置]${address ? ' ' + address : ''}`,
+            address: address || null,
+            latitude: lineMessage.latitude || null,
+            longitude: lineMessage.longitude || null
+        };
+    }
+    const fallbackType = type || 'unknown';
+    return { type: fallbackType, content: `[${fallbackType}]` };
+}
+
 // 處理 LINE 訊息事件
 async function handleLineMessage(event, userId) {
     try {
         const message = event.message;
         const sourceUserId = event.source.userId;
-        const messageContent = message.text || '';
+        const normalized = normalizeLineMessage(message);
+        const messageContent = normalized.content || '';
+        const messageType = normalized.type || 'unknown';
         const messageId = message.id || `${sourceUserId}_${Date.now()}`;
         
         // 生成快取鍵
-        const cacheKey = `line_${userId}_${sourceUserId}_${messageId}_${messageContent}`;
+        const cacheKey = `line_${userId}_${sourceUserId}_${messageId}_${messageType}_${messageContent}`;
         
         // 檢查是否已經處理過相同的訊息
         if (messageCache.has(cacheKey)) {
@@ -4864,6 +4919,7 @@ async function handleLineMessage(event, userId) {
         console.log('📋 訊息詳細資訊:', {
             messageId: messageId,
             messageContent: messageContent,
+            messageType: messageType,
             sourceUserId: sourceUserId,
             userId: userId,
             timestamp: new Date().toISOString(),
@@ -4916,18 +4972,31 @@ async function handleLineMessage(event, userId) {
         const recentMessages = conv.messages.slice(-10); // 檢查最近 10 條訊息
         
         // 如果最近有相同的用戶訊息，跳過處理
-        const duplicateMessage = recentMessages.find(msg => 
-            msg.role === 'user' && 
-            msg.content === messageContent && 
-            (new Date(messageTimestamp) - new Date(msg.timestamp)) < 30000 // 30 秒內
-        );
+        const duplicateMessage = messageType === 'text'
+            ? recentMessages.find(msg => 
+                msg.role === 'user' && 
+                msg.content === messageContent && 
+                msg.type === 'text' &&
+                (new Date(messageTimestamp) - new Date(msg.timestamp)) < 30000 // 30 秒內
+            )
+            : null;
         
         if (duplicateMessage) {
             console.log('⚠️ 檢測到重複訊息，跳過處理:', messageContent);
             return;
         }
         
-        conv.messages.push({ role: 'user', content: messageContent, timestamp: messageTimestamp });
+        const userMessage = { role: 'user', content: messageContent, timestamp: messageTimestamp, type: messageType };
+        if (normalized.stickerId) userMessage.stickerId = normalized.stickerId;
+        if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
+        if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
+        if (normalized.stickerUrl) userMessage.stickerUrl = normalized.stickerUrl;
+        if (normalized.fileName) userMessage.fileName = normalized.fileName;
+        if (normalized.fileSize) userMessage.fileSize = normalized.fileSize;
+        if (normalized.address) userMessage.address = normalized.address;
+        if (normalized.latitude !== null) userMessage.latitude = normalized.latitude;
+        if (normalized.longitude !== null) userMessage.longitude = normalized.longitude;
+        conv.messages.push(userMessage);
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
 
@@ -4955,7 +5024,8 @@ async function handleLineMessage(event, userId) {
                 console.log('   userIdInt:', userIdInt);
                 
                 // 使用對話歷史生成回覆
-                const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, message.text || '');
+                const aiPrompt = messageType === 'text' ? (message.text || messageContent) : messageContent;
+                const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, aiPrompt);
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 replyText = reply;
                 replySuccess = true;
@@ -5378,11 +5448,13 @@ async function handleLineBotMessage(event, bot) {
     try {
         const message = event.message;
         const sourceUserId = event.source.userId;
-        const messageContent = message.text || '';
+        const normalized = normalizeLineMessage(message);
+        const messageContent = normalized.content || '';
+        const messageType = normalized.type || 'unknown';
         const messageId = message.id || `${sourceUserId}_${Date.now()}`;
         
         // 生成快取鍵（包含 Bot ID）
-        const cacheKey = `line_bot_${bot.id}_${sourceUserId}_${messageId}_${messageContent}`;
+        const cacheKey = `line_bot_${bot.id}_${sourceUserId}_${messageId}_${messageType}_${messageContent}`;
         
         // 檢查是否已經處理過相同的訊息
         if (messageCache.has(cacheKey)) {
@@ -5446,18 +5518,31 @@ async function handleLineBotMessage(event, bot) {
         // 檢查重複訊息
         const messageTimestamp = new Date().toISOString();
         const recentMessages = conv.messages.slice(-10);
-        const duplicateMessage = recentMessages.find(msg => 
-            msg.role === 'user' && 
-            msg.content === messageContent && 
-            (new Date(messageTimestamp) - new Date(msg.timestamp)) < 30000
-        );
+        const duplicateMessage = messageType === 'text'
+            ? recentMessages.find(msg => 
+                msg.role === 'user' && 
+                msg.content === messageContent && 
+                msg.type === 'text' &&
+                (new Date(messageTimestamp) - new Date(msg.timestamp)) < 30000
+            )
+            : null;
         
         if (duplicateMessage) {
             console.log('⚠️ 檢測到重複訊息，跳過處理:', messageContent);
             return;
         }
         
-        conv.messages.push({ role: 'user', content: messageContent, timestamp: messageTimestamp });
+        const userMessage = { role: 'user', content: messageContent, timestamp: messageTimestamp, type: messageType };
+        if (normalized.stickerId) userMessage.stickerId = normalized.stickerId;
+        if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
+        if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
+        if (normalized.stickerUrl) userMessage.stickerUrl = normalized.stickerUrl;
+        if (normalized.fileName) userMessage.fileName = normalized.fileName;
+        if (normalized.fileSize) userMessage.fileSize = normalized.fileSize;
+        if (normalized.address) userMessage.address = normalized.address;
+        if (normalized.latitude !== null) userMessage.latitude = normalized.latitude;
+        if (normalized.longitude !== null) userMessage.longitude = normalized.longitude;
+        conv.messages.push(userMessage);
         conv.updatedAt = new Date().toISOString();
         
         // 更新 Bot 的訊息計數
@@ -5479,7 +5564,8 @@ async function handleLineBotMessage(event, bot) {
                 console.log('📝 開始生成 AI 回覆');
                 
                 // 使用對話歷史生成回覆
-                const { reply } = await generateAIReplyWithHistory(bot.user_id, conv.messages, messageContent || '');
+                const aiPrompt = messageType === 'text' ? (message.text || messageContent) : messageContent;
+                const { reply } = await generateAIReplyWithHistory(bot.user_id, conv.messages, aiPrompt);
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 
                 const aiMessage = {
