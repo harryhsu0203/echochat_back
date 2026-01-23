@@ -4833,7 +4833,14 @@ function getConversationLastMessageTimestamp(conversation) {
 function maybeRestoreAutoReply(conversation) {
     if (!conversation || conversation.autoReplyEnabled !== false) return false;
     const manualSince = conversation.lastManualReplyAt || conversation.manualModeSince || getConversationLastMessageTimestamp(conversation);
-    if (!manualSince) return false;
+    if (!manualSince) {
+        conversation.autoReplyEnabled = true;
+        conversation.autoReplyRestoredAt = new Date().toISOString();
+        conversation.manualModeRestoredReason = 'missing_manual_marker';
+        delete conversation.manualModeSince;
+        delete conversation.lastManualReplyAt;
+        return true;
+    }
     const sinceMs = Date.parse(manualSince);
     if (Number.isNaN(sinceMs)) {
         conversation.autoReplyEnabled = true;
@@ -4948,10 +4955,20 @@ async function handleLineMessage(event, userId) {
             const creds = getLineCredentials(userId);
             if (creds && creds.channelAccessToken) {
                 const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
-                const profile = await client.getProfile(sourceUserId);
-                displayName = profile.displayName || displayName;
-                pictureUrl = profile.pictureUrl || null;
-                profileLoaded = true;
+                const sourceType = event.source?.type;
+                let profile = null;
+                if (sourceType === 'group' && event.source?.groupId) {
+                    profile = await client.getGroupMemberProfile(event.source.groupId, sourceUserId);
+                } else if (sourceType === 'room' && event.source?.roomId) {
+                    profile = await client.getRoomMemberProfile(event.source.roomId, sourceUserId);
+                } else {
+                    profile = await client.getProfile(sourceUserId);
+                }
+                if (profile) {
+                    displayName = profile.displayName || displayName;
+                    pictureUrl = profile.pictureUrl || null;
+                    profileLoaded = true;
+                }
             }
         } catch (profileErr) {
             console.warn('無法取得 LINE 用戶資料:', profileErr.message);
@@ -5020,6 +5037,13 @@ async function handleLineMessage(event, userId) {
 
         // 若人工接手過久未回覆，恢復自動回覆
         if (maybeRestoreAutoReply(conv)) {
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
+
+        // 若尚未設定自動回覆，預設啟用
+        if (typeof conv.autoReplyEnabled !== 'boolean') {
+            conv.autoReplyEnabled = true;
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
         }
@@ -5496,10 +5520,20 @@ async function handleLineBotMessage(event, bot) {
             
             if (token && secret) {
                 const client = new Client({ channelAccessToken: token, channelSecret: secret });
-                const profile = await client.getProfile(sourceUserId);
-                displayName = profile.displayName || displayName;
-                pictureUrl = profile.pictureUrl || null;
-                profileLoaded = true;
+                const sourceType = event.source?.type;
+                let profile = null;
+                if (sourceType === 'group' && event.source?.groupId) {
+                    profile = await client.getGroupMemberProfile(event.source.groupId, sourceUserId);
+                } else if (sourceType === 'room' && event.source?.roomId) {
+                    profile = await client.getRoomMemberProfile(event.source.roomId, sourceUserId);
+                } else {
+                    profile = await client.getProfile(sourceUserId);
+                }
+                if (profile) {
+                    displayName = profile.displayName || displayName;
+                    pictureUrl = profile.pictureUrl || null;
+                    profileLoaded = true;
+                }
             }
         } catch (profileErr) {
             console.warn('無法取得 LINE 用戶資料:', profileErr.message);
@@ -5574,6 +5608,13 @@ async function handleLineBotMessage(event, bot) {
         
         // 若人工接手過久未回覆，恢復自動回覆
         if (maybeRestoreAutoReply(conv)) {
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
+
+        // 若尚未設定自動回覆，預設啟用
+        if (typeof conv.autoReplyEnabled !== 'boolean') {
+            conv.autoReplyEnabled = true;
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
         }
