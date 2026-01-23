@@ -108,6 +108,8 @@ app.disable('x-powered-by');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const SESSION_TIMEOUT_MINUTES = Math.max(parseInt(process.env.SESSION_TIMEOUT_MINUTES || '15', 10) || 15, 1);
 const JWT_EXPIRES_IN = `${SESSION_TIMEOUT_MINUTES}m`;
+const MANUAL_REPLY_IDLE_MINUTES = Math.max(parseInt(process.env.MANUAL_REPLY_IDLE_MINUTES || '10', 10) || 10, 1);
+const MANUAL_REPLY_IDLE_MS = MANUAL_REPLY_IDLE_MINUTES * 60 * 1000;
 // 綠界金流設定
 const ECPAY_MODE = process.env.ECPAY_MODE || 'Stage'; // 'Stage' or 'Prod'
 const ECPAY_MERCHANT_ID = process.env.ECPAY_MERCHANT_ID || '';
@@ -4814,6 +4816,29 @@ app.post('/api/webhook/whatsapp/:userId', async (req, res) => {
     }
 });
 
+function getConversationLastMessageTimestamp(conversation) {
+    if (!conversation) return null;
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    const lastMessage = messages.length ? messages[messages.length - 1] : null;
+    return lastMessage?.timestamp || conversation.updatedAt || conversation.createdAt || null;
+}
+
+function maybeRestoreAutoReply(conversation) {
+    if (!conversation || conversation.autoReplyEnabled !== false) return false;
+    const manualSince = conversation.lastManualReplyAt || conversation.manualModeSince || getConversationLastMessageTimestamp(conversation);
+    if (!manualSince) return false;
+    const sinceMs = Date.parse(manualSince);
+    if (Number.isNaN(sinceMs)) return false;
+    if (Date.now() - sinceMs < MANUAL_REPLY_IDLE_MS) return false;
+
+    conversation.autoReplyEnabled = true;
+    conversation.autoReplyRestoredAt = new Date().toISOString();
+    conversation.manualModeRestoredReason = 'idle_timeout';
+    delete conversation.manualModeSince;
+    delete conversation.lastManualReplyAt;
+    return true;
+}
+
 // 處理 LINE 訊息事件
 async function handleLineMessage(event, userId) {
     try {
@@ -4905,6 +4930,12 @@ async function handleLineMessage(event, userId) {
         conv.messages.push({ role: 'user', content: messageContent, timestamp: messageTimestamp });
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
+
+        // 若人工接手過久未回覆，恢復自動回覆
+        if (maybeRestoreAutoReply(conv)) {
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
 
         // 檢查是否需要自動回覆（從對話設定中讀取）
         const autoReplyEnabled = conv.autoReplyEnabled !== false; // 預設為開啟，除非明確關閉
@@ -5017,14 +5048,20 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
             });
         }
         
+        const nowIso = new Date().toISOString();
+
         // 將人工回覆加入對話記錄
         conv.messages.push({ 
             role: 'assistant', 
             content: message, 
-            timestamp: new Date().toISOString(),
+            timestamp: nowIso,
             isManualReply: true
         });
-        conv.updatedAt = new Date().toISOString();
+        // 人工回覆即視為接手對話
+        conv.autoReplyEnabled = false;
+        if (!conv.manualModeSince) conv.manualModeSince = nowIso;
+        conv.lastManualReplyAt = nowIso;
+        conv.updatedAt = nowIso;
         saveDatabase();
         
         // 如果是 LINE 對話，推送到 LINE
@@ -5083,8 +5120,17 @@ app.post('/api/conversation/toggle-auto-reply', authenticateJWT, async (req, res
         }
         
         // 更新自動回覆設定
+        const nowIso = new Date().toISOString();
         conv.autoReplyEnabled = autoReplyEnabled;
-        conv.updatedAt = new Date().toISOString();
+        if (autoReplyEnabled) {
+            delete conv.manualModeSince;
+            delete conv.lastManualReplyAt;
+            delete conv.autoReplyRestoredAt;
+            delete conv.manualModeRestoredReason;
+        } else {
+            conv.manualModeSince = nowIso;
+        }
+        conv.updatedAt = nowIso;
         saveDatabase();
         
         console.log(`✅ 對話 ${conversationId} 自動回覆設定已更新: ${autoReplyEnabled}`);
@@ -5437,6 +5483,12 @@ async function handleLineBotMessage(event, bot) {
         
         saveDatabase();
         
+        // 若人工接手過久未回覆，恢復自動回覆
+        if (maybeRestoreAutoReply(conv)) {
+            conv.updatedAt = new Date().toISOString();
+            saveDatabase();
+        }
+
         // 檢查是否需要自動回覆
         const autoReplyEnabled = conv.autoReplyEnabled !== false;
         
