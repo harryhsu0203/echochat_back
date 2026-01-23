@@ -667,10 +667,16 @@ function findUserChannel(userId, platform) {
 function getLineCredentials(userId) {
     const key = String(userId);
     // 優先從記憶體快取取得（保存時已放入明文）
-    if (lineAPISettings[key] && lineAPISettings[key].channelAccessToken && lineAPISettings[key].channelSecret) {
+    const cached = lineAPISettings[key];
+    const hasRealToken = cached
+        && cached.channelAccessToken
+        && cached.channelSecret
+        && cached.channelAccessToken !== 'Configured'
+        && cached.channelSecret !== 'Configured';
+    if (hasRealToken) {
         return {
-            channelAccessToken: lineAPISettings[key].channelAccessToken,
-            channelSecret: lineAPISettings[key].channelSecret
+            channelAccessToken: cached.channelAccessToken,
+            channelSecret: cached.channelSecret
         };
     }
     // 若快取不存在，從資料庫讀取並解密
@@ -4351,19 +4357,19 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
         const record = (database.line_api_settings || []).find(r => r.user_id === userId);
         const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '';
         const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret || '';
-        // 更新快取（不回傳明文至前端，僅標示狀態）
-        lineAPISettings[userId] = {
-            channelAccessToken: decryptedToken ? 'Configured' : '',
-            channelSecret: decryptedSecret ? 'Configured' : '',
+        // 更新快取（不回傳明文至前端）
+        lineAPISettings[String(userId)] = {
+            channelAccessToken: decryptedToken || '',
+            channelSecret: decryptedSecret || '',
             webhookUrl: record?.webhook_url || ''
         };
 
         res.json({
             success: true,
             data: {
-                channelAccessToken: lineAPISettings[userId].channelAccessToken,
-                channelSecret: lineAPISettings[userId].channelSecret,
-                webhookUrl: lineAPISettings[userId].webhookUrl,
+                channelAccessToken: decryptedToken ? 'Configured' : '',
+                channelSecret: decryptedSecret ? 'Configured' : '',
+                webhookUrl: record?.webhook_url || '',
                 isActive: record?.isActive !== false // 預設為啟用
             }
         });
