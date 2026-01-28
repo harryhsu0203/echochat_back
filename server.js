@@ -4620,6 +4620,56 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
     }
 });
 
+// 補齊 LINE channel_id（不影響既有綁定）
+app.post('/api/line-api/migrate-channel-ids', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        loadDatabase();
+        if (!database.line_api_settings) database.line_api_settings = [];
+        const settings = database.line_api_settings.filter(r => String(r.user_id) === String(userId));
+        let updated = 0;
+        let skipped = 0;
+        let failed = 0;
+
+        for (const record of settings) {
+            if (record.channel_id) {
+                skipped += 1;
+                continue;
+            }
+            const token = decryptSensitive(record.channel_access_token) || record.channel_access_token_plain || record.channel_access_token || '';
+            if (!token) {
+                failed += 1;
+                continue;
+            }
+            try {
+                const verifyResp = await axios.get('https://api.line.me/oauth2/v2.1/verify', {
+                    headers: { Authorization: `Bearer ${token}` },
+                    timeout: 10000
+                });
+                const channelId = String(verifyResp.data?.client_id || '');
+                if (!channelId) {
+                    failed += 1;
+                    continue;
+                }
+                record.channel_id = channelId;
+                record.updated_at = new Date().toISOString();
+                updated += 1;
+            } catch (verifyErr) {
+                failed += 1;
+            }
+        }
+
+        if (updated > 0) saveDatabase();
+
+        res.json({
+            success: true,
+            result: { updated, skipped, failed }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '補齊 channel_id 失敗' });
+    }
+});
+
 // AI/LINE 診斷（僅登入後可用）
 app.get('/api/diagnostics/ai', authenticateJWT, async (req, res) => {
     try {
