@@ -542,6 +542,29 @@ app.get('/api/env-check', (req, res) => {
     });
 });
 
+// 公開診斷（不含敏感資訊）
+app.get('/api/diagnostics/public', (req, res) => {
+    loadDatabase();
+    const openaiKey = process.env.OPENAI_API_KEY || '';
+    const settings = database.line_api_settings || [];
+    const encryptedCount = settings.filter(r => typeof r.channel_access_token === 'string' && r.channel_access_token.startsWith('v1:gcm:')).length;
+    const plainCount = settings.filter(r => !!r.channel_access_token_plain).length;
+    res.json({
+        success: true,
+        openai: {
+            configured: !!openaiKey,
+            length: openaiKey.length,
+            prefix: openaiKey ? openaiKey.slice(0, 4) : ''
+        },
+        line: {
+            hasSecretKey: !!process.env.LINE_SECRET_KEY,
+            settingsCount: settings.length,
+            encryptedCount,
+            plainCount
+        }
+    });
+});
+
 // 請求速率限制
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
