@@ -687,10 +687,23 @@ function findUserChannel(userId, platform) {
 }
 
 // 取得 LINE 憑證（優先從記憶體快取，提升效能並避免解密問題）
-function getLineCredentials(userId) {
-    const key = String(userId);
+function findLineSetting(userId, channelId) {
+    loadDatabase();
+    const settings = database.line_api_settings || [];
+    const byUser = settings.filter(r => String(r.user_id) === String(userId));
+    if (!byUser.length) return null;
+    if (channelId) {
+        const byChannel = byUser.find(r => String(r.channel_id || '') === String(channelId));
+        if (byChannel) return byChannel;
+    }
+    // fallback: first record for the user
+    return byUser[0];
+}
+
+function getLineCredentials(userId, channelId) {
+    const cacheKey = `${String(userId)}:${channelId || 'default'}`;
     // 優先從記憶體快取取得（保存時已放入明文）
-    const cached = lineAPISettings[key];
+    const cached = lineAPISettings[cacheKey];
     const hasRealToken = cached
         && cached.channelAccessToken
         && cached.channelSecret
@@ -703,13 +716,12 @@ function getLineCredentials(userId) {
         };
     }
     // 若快取不存在，從資料庫讀取並解密
-    loadDatabase();
-    const rec = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
+    const rec = findLineSetting(userId, channelId);
     if (!rec) return null;
     const token = decryptSensitive(rec.channel_access_token) || rec.channel_access_token_plain || rec.channel_access_token || '';
     const secret = decryptSensitive(rec.channel_secret) || rec.channel_secret_plain || rec.channel_secret || '';
     // 同時更新快取
-    lineAPISettings[key] = { channelAccessToken: token, channelSecret: secret };
+    lineAPISettings[cacheKey] = { channelAccessToken: token, channelSecret: secret };
     return { channelAccessToken: token, channelSecret: secret };
 }
 
@@ -4402,7 +4414,7 @@ async function maybeRefreshConversationProfile(conv) {
         let token = '';
         let secret = '';
         if (conv.platform === 'line') {
-            const creds = getLineCredentials(conv.userId);
+            const creds = getLineCredentials(conv.userId, conv.channelId);
             token = creds?.channelAccessToken || '';
             secret = creds?.channelSecret || '';
         } else if (conv.platform === 'line_bot' && conv.bot_id) {
@@ -4449,7 +4461,7 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
             saveDatabase();
         }
         // 更新快取（不回傳明文至前端）
-        lineAPISettings[String(userId)] = {
+        lineAPISettings[`${String(userId)}:${record?.channel_id || 'default'}`] = {
             channelAccessToken: decryptedToken || '',
             channelSecret: decryptedSecret || '',
             webhookUrl: record?.webhook_url || ''
@@ -4490,13 +4502,28 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
         console.log('   Token 長度:', channelAccessToken.length, 'Secret 長度:', channelSecret.length);
 
         loadDatabase();
+        let channelId = '';
+        try {
+            const verifyResp = await axios.get('https://api.line.me/oauth2/v2.1/verify', {
+                headers: { Authorization: `Bearer ${channelAccessToken}` }
+            });
+            channelId = String(verifyResp.data?.client_id || '');
+        } catch (verifyErr) {
+            channelId = '';
+        }
+
         if (!database.line_api_settings) database.line_api_settings = [];
-        const idx = database.line_api_settings.findIndex(r => String(r.user_id) === String(userId));
+        const idx = database.line_api_settings.findIndex(r => {
+            if (String(r.user_id) !== String(userId)) return false;
+            if (channelId) return String(r.channel_id || '') === channelId;
+            return !r.channel_id;
+        });
         const encryptedToken = encryptSensitive(channelAccessToken);
         const encryptedSecret = encryptSensitive(channelSecret);
         const existingRecord = idx >= 0 ? database.line_api_settings[idx] : null;
         const record = {
             user_id: userId,
+            channel_id: channelId || existingRecord?.channel_id || '',
             channel_access_token: encryptedToken || channelAccessToken,
             channel_secret: encryptedSecret || channelSecret,
             channel_access_token_plain: channelAccessToken,
@@ -4515,7 +4542,7 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
         saveDatabase();
 
         // 更新記憶體快取（用於回推時快速取得）
-        lineAPISettings[userId] = {
+        lineAPISettings[`${String(userId)}:${channelId || 'default'}`] = {
             channelAccessToken: channelAccessToken,
             channelSecret: channelSecret,
             webhookUrl: record.webhook_url,
@@ -4558,7 +4585,11 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
 
         loadDatabase();
         if (!database.line_api_settings) database.line_api_settings = [];
-        const idx = database.line_api_settings.findIndex(r => String(r.user_id) === String(userId));
+        const idx = database.line_api_settings.findIndex(r => {
+            if (String(r.user_id) !== String(userId)) return false;
+            if (req.body.channelId) return String(r.channel_id || '') === String(req.body.channelId);
+            return true;
+        });
         
         if (idx < 0) {
             return res.status(404).json({
@@ -4717,6 +4748,7 @@ app.head('/api/webhook/line/:userId', (req, res) => {
 app.post('/api/webhook/line/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
+        const destination = req.body?.destination || null;
         const events = req.body.events || [];
         
         console.log(`📨 收到 LINE Webhook: 用戶 ${userId}, 事件數量: ${events.length}`);
@@ -4730,7 +4762,7 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
         
         // 檢查頻道是否啟用
         loadDatabase();
-        const lineSetting = (database.line_api_settings || []).find(r => r.user_id == userId);
+        const lineSetting = findLineSetting(userId, destination);
         if (lineSetting && lineSetting.isActive === false) {
             console.log(`⚠️ LINE 頻道已停用，跳過處理: 用戶 ${userId}`);
             return res.json({ 
@@ -4738,6 +4770,11 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
                 message: '頻道已停用，事件已忽略',
                 ignored: true 
             });
+        }
+        if (lineSetting && destination && !lineSetting.channel_id) {
+            lineSetting.channel_id = String(destination);
+            lineSetting.updated_at = new Date().toISOString();
+            saveDatabase();
         }
         
         // 處理每個事件
@@ -4759,7 +4796,7 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
             
             switch (event.type) {
                 case 'message':
-                    await handleLineMessage(event, userId);
+                    await handleLineMessage(event, userId, destination);
                     break;
                 case 'follow':
                     await handleLineFollow(event, userId);
@@ -5056,7 +5093,7 @@ function normalizeLineMessage(lineMessage) {
 }
 
 // 處理 LINE 訊息事件
-async function handleLineMessage(event, userId) {
+async function handleLineMessage(event, userId, channelId) {
     try {
         const message = event.message;
         const sourceUserId = event.source.userId;
@@ -5094,7 +5131,7 @@ async function handleLineMessage(event, userId) {
         let pictureUrl = null;
         let profileLoaded = false;
         try {
-            const creds = getLineCredentials(userId);
+            const creds = getLineCredentials(userId, channelId);
             if (creds && creds.channelAccessToken) {
                 const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
                 const sourceType = event.source?.type;
@@ -5129,6 +5166,7 @@ async function handleLineMessage(event, userId) {
                 customerName: displayName,
                 customerPicture: pictureUrl,
                 customerLineId: sourceUserId,
+                channelId: channelId || null,
                 sourceType: event.source?.type || null,
                 groupId: event.source?.groupId || null,
                 roomId: event.source?.roomId || null,
@@ -5144,6 +5182,7 @@ async function handleLineMessage(event, userId) {
                 conv.customerPicture = pictureUrl;
             }
             conv.customerLineId = sourceUserId;
+            if (!conv.channelId && channelId) conv.channelId = channelId;
             if (!conv.sourceType) conv.sourceType = event.source?.type || null;
             if (!conv.groupId) conv.groupId = event.source?.groupId || null;
             if (!conv.roomId) conv.roomId = event.source?.roomId || null;
