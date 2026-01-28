@@ -683,8 +683,8 @@ function getLineCredentials(userId) {
     loadDatabase();
     const rec = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
     if (!rec) return null;
-    const token = decryptSensitive(rec.channel_access_token) || rec.channel_access_token || '';
-    const secret = decryptSensitive(rec.channel_secret) || rec.channel_secret || '';
+    const token = decryptSensitive(rec.channel_access_token) || rec.channel_access_token_plain || rec.channel_access_token || '';
+    const secret = decryptSensitive(rec.channel_secret) || rec.channel_secret_plain || rec.channel_secret || '';
     // 同時更新快取
     lineAPISettings[key] = { channelAccessToken: token, channelSecret: secret };
     return { channelAccessToken: token, channelSecret: secret };
@@ -4349,14 +4349,20 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
 // LINE API 設定儲存 (用戶專用)
 let lineAPISettings = {}; // 仍保留快取，但以 database.line_api_settings 作持久化
 
+function normalizeAutoReplyValue(value) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') return value.toLowerCase() === 'true';
+    return true;
+}
+
 // 獲取 LINE API 設定
 app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
     try {
         const userId = req.staff.id;
         loadDatabase();
-        const record = (database.line_api_settings || []).find(r => r.user_id === userId);
-        const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token || '';
-        const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret || '';
+        const record = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
+        const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token_plain || record?.channel_access_token || '';
+        const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret_plain || record?.channel_secret || '';
         // 更新快取（不回傳明文至前端）
         lineAPISettings[String(userId)] = {
             channelAccessToken: decryptedToken || '',
@@ -4400,7 +4406,7 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
 
         loadDatabase();
         if (!database.line_api_settings) database.line_api_settings = [];
-        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        const idx = database.line_api_settings.findIndex(r => String(r.user_id) === String(userId));
         const encryptedToken = encryptSensitive(channelAccessToken);
         const encryptedSecret = encryptSensitive(channelSecret);
         const existingRecord = idx >= 0 ? database.line_api_settings[idx] : null;
@@ -4408,6 +4414,8 @@ app.post('/api/line-api/settings', authenticateJWT, async (req, res) => {
             user_id: userId,
             channel_access_token: encryptedToken || channelAccessToken,
             channel_secret: encryptedSecret || channelSecret,
+            channel_access_token_plain: channelAccessToken,
+            channel_secret_plain: channelSecret,
             webhook_url: webhookUrl || `https://${req.get('host')}/api/webhook/line/${userId}`,
             isActive: existingRecord?.isActive !== false, // 保留現有狀態，新記錄預設為啟用
             updated_at: new Date().toISOString()
@@ -4465,7 +4473,7 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
 
         loadDatabase();
         if (!database.line_api_settings) database.line_api_settings = [];
-        const idx = database.line_api_settings.findIndex(r => r.user_id === userId);
+        const idx = database.line_api_settings.findIndex(r => String(r.user_id) === String(userId));
         
         if (idx < 0) {
             return res.status(404).json({
@@ -5042,11 +5050,9 @@ async function handleLineMessage(event, userId) {
         }
 
         // 若尚未設定自動回覆，預設啟用
-        if (typeof conv.autoReplyEnabled !== 'boolean') {
-            conv.autoReplyEnabled = true;
-            conv.updatedAt = new Date().toISOString();
-            saveDatabase();
-        }
+        conv.autoReplyEnabled = normalizeAutoReplyValue(conv.autoReplyEnabled);
+        conv.updatedAt = new Date().toISOString();
+        saveDatabase();
 
         // 檢查是否需要自動回覆（從對話設定中讀取）
         const autoReplyEnabled = conv.autoReplyEnabled !== false; // 預設為開啟，除非明確關閉
@@ -5613,11 +5619,9 @@ async function handleLineBotMessage(event, bot) {
         }
 
         // 若尚未設定自動回覆，預設啟用
-        if (typeof conv.autoReplyEnabled !== 'boolean') {
-            conv.autoReplyEnabled = true;
-            conv.updatedAt = new Date().toISOString();
-            saveDatabase();
-        }
+        conv.autoReplyEnabled = normalizeAutoReplyValue(conv.autoReplyEnabled);
+        conv.updatedAt = new Date().toISOString();
+        saveDatabase();
 
         // 檢查是否需要自動回覆
         const autoReplyEnabled = conv.autoReplyEnabled !== false;
