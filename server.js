@@ -4418,6 +4418,13 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
         const record = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
         const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token_plain || record?.channel_access_token || '';
         const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret_plain || record?.channel_secret || '';
+        // 若成功解密且尚未補明文備援，補寫回資料庫
+        if (record && decryptedToken && decryptedSecret && (!record.channel_access_token_plain || !record.channel_secret_plain)) {
+            record.channel_access_token_plain = decryptedToken;
+            record.channel_secret_plain = decryptedSecret;
+            record.updated_at = new Date().toISOString();
+            saveDatabase();
+        }
         // 更新快取（不回傳明文至前端）
         lineAPISettings[String(userId)] = {
             channelAccessToken: decryptedToken || '',
@@ -4556,6 +4563,55 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
             success: false,
             error: '切換啟用狀態失敗'
         });
+    }
+});
+
+// AI/LINE 診斷（僅登入後可用）
+app.get('/api/diagnostics/ai', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        loadDatabase();
+        const record = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
+        const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token_plain || '';
+        const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret_plain || '';
+        const hasLineSecretKey = !!process.env.LINE_SECRET_KEY;
+        const openaiKey = process.env.OPENAI_API_KEY || '';
+        const openaiKeyStatus = {
+            configured: !!openaiKey,
+            length: openaiKey.length,
+            prefix: openaiKey ? openaiKey.slice(0, 4) : '',
+            looksValid: openaiKey.startsWith('sk-')
+        };
+
+        const user = getUserById(userId);
+        const plan = user?.plan || 'free';
+        const planAllowance = getPlanAllowance(plan, user);
+        const conversationLimit = getPlanConversationLimit(plan, user);
+        const availableThisCycle = Math.max(planAllowance - (user?.token_used_in_cycle || 0), 0) + (user?.token_bonus_balance || 0);
+
+        res.json({
+            success: true,
+            openai: openaiKeyStatus,
+            line: {
+                hasRecord: !!record,
+                hasEncryptedToken: !!record?.channel_access_token,
+                hasPlainToken: !!record?.channel_access_token_plain,
+                tokenLength: decryptedToken ? decryptedToken.length : 0,
+                secretLength: decryptedSecret ? decryptedSecret.length : 0,
+                hasLineSecretKey
+            },
+            usage: {
+                plan,
+                tokenUsed: user?.token_used_in_cycle || 0,
+                tokenBonus: user?.token_bonus_balance || 0,
+                allowance: planAllowance,
+                available: availableThisCycle,
+                conversationUsed: user?.conversation_used_in_cycle || 0,
+                conversationLimit
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: '診斷資訊取得失敗' });
     }
 });
 
