@@ -2497,7 +2497,7 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
         });
 
 // 取得單一對話詳情
-app.get('/api/conversations/:conversationId', authenticateJWT, (req, res) => {
+app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) => {
     try {
         loadDatabase();
         const userId = req.staff.id;
@@ -2511,6 +2511,8 @@ app.get('/api/conversations/:conversationId', authenticateJWT, (req, res) => {
             return (id.startsWith(`line_${userId}_`) || id.startsWith(`slack_${userId}_`) || id.startsWith(`telegram_${userId}_`) || id.startsWith(`messenger_${userId}_`) || id.startsWith(`discord_${userId}_`));
         });
         if (!conv) return res.status(404).json({ success: false, error: '對話不存在' });
+        const updated = await maybeRefreshConversationProfile(conv);
+        if (updated) saveDatabase();
         return res.json({ success: true, conversation: conv });
     } catch (error) {
         return res.status(500).json({ success: false, error: '無法取得對話詳情' });
@@ -4355,6 +4357,59 @@ function normalizeAutoReplyValue(value) {
     return true;
 }
 
+async function fetchLineProfile({ channelAccessToken, channelSecret, sourceType, groupId, roomId, userId }) {
+    if (!channelAccessToken || !channelSecret || !userId) return null;
+    const client = new Client({ channelAccessToken, channelSecret });
+    if (sourceType === 'group' && groupId) {
+        return client.getGroupMemberProfile(groupId, userId);
+    }
+    if (sourceType === 'room' && roomId) {
+        return client.getRoomMemberProfile(roomId, userId);
+    }
+    return client.getProfile(userId);
+}
+
+async function maybeRefreshConversationProfile(conv) {
+    if (!conv || !conv.customerLineId) return false;
+    const needsName = !conv.customerName || conv.customerName === 'LINE 使用者';
+    const needsPicture = !conv.customerPicture;
+    if (!needsName && !needsPicture) return false;
+
+    try {
+        let token = '';
+        let secret = '';
+        if (conv.platform === 'line') {
+            const creds = getLineCredentials(conv.userId);
+            token = creds?.channelAccessToken || '';
+            secret = creds?.channelSecret || '';
+        } else if (conv.platform === 'line_bot' && conv.bot_id) {
+            loadDatabase();
+            const bot = (database.line_bots || []).find(b => b.id === conv.bot_id);
+            token = decryptSensitive(bot?.channel_access_token) || bot?.channel_access_token_plain || '';
+            secret = decryptSensitive(bot?.channel_secret) || bot?.channel_secret_plain || '';
+        }
+
+        if (!token || !secret) return false;
+
+        const profile = await fetchLineProfile({
+            channelAccessToken: token,
+            channelSecret: secret,
+            sourceType: conv.sourceType,
+            groupId: conv.groupId,
+            roomId: conv.roomId,
+            userId: conv.customerLineId
+        });
+
+        if (!profile) return false;
+        conv.customerName = profile.displayName || conv.customerName;
+        conv.customerPicture = profile.pictureUrl || conv.customerPicture;
+        conv.profileRefreshedAt = new Date().toISOString();
+        return true;
+    } catch (error) {
+        return false;
+    }
+}
+
 // 獲取 LINE API 設定
 app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
     try {
@@ -4995,6 +5050,9 @@ async function handleLineMessage(event, userId) {
                 customerName: displayName,
                 customerPicture: pictureUrl,
                 customerLineId: sourceUserId,
+                sourceType: event.source?.type || null,
+                groupId: event.source?.groupId || null,
+                roomId: event.source?.roomId || null,
                 messages: [], 
                 createdAt: new Date().toISOString(), 
                 updatedAt: new Date().toISOString() 
@@ -5007,6 +5065,9 @@ async function handleLineMessage(event, userId) {
                 conv.customerPicture = pictureUrl;
             }
             conv.customerLineId = sourceUserId;
+            if (!conv.sourceType) conv.sourceType = event.source?.type || null;
+            if (!conv.groupId) conv.groupId = event.source?.groupId || null;
+            if (!conv.roomId) conv.roomId = event.source?.roomId || null;
             if (!conv.userId) conv.userId = parseInt(userId);
         }
         
@@ -5560,6 +5621,9 @@ async function handleLineBotMessage(event, bot) {
                 customerName: displayName,
                 customerPicture: pictureUrl,
                 customerLineId: sourceUserId,
+                sourceType: event.source?.type || null,
+                groupId: event.source?.groupId || null,
+                roomId: event.source?.roomId || null,
                 messages: [], 
                 createdAt: new Date().toISOString(), 
                 updatedAt: new Date().toISOString() 
@@ -5574,6 +5638,9 @@ async function handleLineBotMessage(event, bot) {
                 conv.customerPicture = pictureUrl;
             }
             conv.customerLineId = sourceUserId;
+            if (!conv.sourceType) conv.sourceType = event.source?.type || null;
+            if (!conv.groupId) conv.groupId = event.source?.groupId || null;
+            if (!conv.roomId) conv.roomId = event.source?.roomId || null;
             if (!conv.userId) conv.userId = bot.user_id;
         }
         
