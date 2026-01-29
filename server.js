@@ -4442,6 +4442,19 @@ function normalizeAutoReplyValue(value) {
     return true;
 }
 
+function extractLineCredentials(record) {
+    if (!record) return { token: '', secret: '' };
+    const token = decryptSensitive(record.channel_access_token)
+        || record.channel_access_token_plain
+        || record.channel_access_token
+        || '';
+    const secret = decryptSensitive(record.channel_secret)
+        || record.channel_secret_plain
+        || record.channel_secret
+        || '';
+    return { token, secret };
+}
+
 async function fetchLineProfile({ channelAccessToken, channelSecret, sourceType, groupId, roomId, userId }) {
     if (!channelAccessToken || !channelSecret || !userId) return null;
     const client = new Client({ channelAccessToken, channelSecret });
@@ -4465,9 +4478,10 @@ async function maybeRefreshConversationProfile(conv) {
         let secret = '';
         let channelId = conv.channelId || null;
         if (conv.platform === 'line') {
-            const creds = getLineCredentials(conv.userId, conv.channelId);
-            token = creds?.channelAccessToken || '';
-            secret = creds?.channelSecret || '';
+            const setting = await resolveLineSettingForDestination(conv.userId, conv.channelId);
+            const creds = extractLineCredentials(setting);
+            token = creds.token;
+            secret = creds.secret;
         } else if (conv.platform === 'line_bot' && conv.bot_id) {
             loadDatabase();
             const bot = (database.line_bots || []).find(b => b.id === conv.bot_id);
@@ -4476,46 +4490,6 @@ async function maybeRefreshConversationProfile(conv) {
         }
 
         // 若對話未綁定 channelId，嘗試逐一比對使用者的 LINE 設定（只影響該使用者）
-        if (conv.platform === 'line' && (!token || !secret)) {
-            loadDatabase();
-            const settings = (database.line_api_settings || []).filter(r => String(r.user_id) === String(conv.userId));
-            for (const record of settings) {
-                const candidateToken = decryptSensitive(record.channel_access_token)
-                    || record.channel_access_token_plain
-                    || record.channel_access_token
-                    || '';
-                const candidateSecret = decryptSensitive(record.channel_secret)
-                    || record.channel_secret_plain
-                    || record.channel_secret
-                    || '';
-                if (!candidateToken || !candidateSecret) continue;
-                try {
-                    const profile = await fetchLineProfile({
-                        channelAccessToken: candidateToken,
-                        channelSecret: candidateSecret,
-                        sourceType: conv.sourceType,
-                        groupId: conv.groupId,
-                        roomId: conv.roomId,
-                        userId: conv.customerLineId
-                    });
-                    if (profile) {
-                        token = candidateToken;
-                        secret = candidateSecret;
-                        try {
-                            const mappedChannelId = await verifyLineChannelId(candidateToken);
-                            if (mappedChannelId && !record.channel_id) {
-                                record.channel_id = mappedChannelId;
-                                record.updated_at = new Date().toISOString();
-                                saveDatabase();
-                            }
-                            channelId = mappedChannelId || channelId;
-                        } catch (_) {}
-                        break;
-                    }
-                } catch (_) {}
-            }
-        }
-
         if (!token || !secret) return false;
 
         const profile = await fetchLineProfile({
@@ -4939,7 +4913,7 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
             
             switch (event.type) {
                 case 'message':
-                    await handleLineMessage(event, userId, destination);
+                    await handleLineMessage(event, userId, destination, lineSetting);
                     break;
                 case 'follow':
                     await handleLineFollow(event, userId);
@@ -5236,7 +5210,7 @@ function normalizeLineMessage(lineMessage) {
 }
 
 // 處理 LINE 訊息事件
-async function handleLineMessage(event, userId, channelId) {
+async function handleLineMessage(event, userId, channelId, lineSetting) {
     try {
         const message = event.message;
         const sourceUserId = event.source.userId;
@@ -5274,9 +5248,11 @@ async function handleLineMessage(event, userId, channelId) {
         let pictureUrl = null;
         let profileLoaded = false;
         try {
-            const creds = getLineCredentials(userId, channelId);
-            if (creds && creds.channelAccessToken) {
-                const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret });
+            const creds = lineSetting ? extractLineCredentials(lineSetting) : getLineCredentials(userId, channelId);
+            const accessToken = lineSetting ? creds.token : creds?.channelAccessToken;
+            const secretToken = lineSetting ? creds.secret : creds?.channelSecret;
+            if (accessToken) {
+                const client = new Client({ channelAccessToken: accessToken, channelSecret: secretToken || '' });
                 const sourceType = event.source?.type;
                 let profile = null;
                 if (sourceType === 'group' && event.source?.groupId) {
@@ -5309,7 +5285,7 @@ async function handleLineMessage(event, userId, channelId) {
                 customerName: displayName,
                 customerPicture: pictureUrl,
                 customerLineId: sourceUserId,
-                channelId: channelId || null,
+                channelId: (lineSetting?.channel_id || channelId) || null,
                 sourceType: event.source?.type || null,
                 groupId: event.source?.groupId || null,
                 roomId: event.source?.roomId || null,
@@ -5325,7 +5301,9 @@ async function handleLineMessage(event, userId, channelId) {
                 conv.customerPicture = pictureUrl;
             }
             conv.customerLineId = sourceUserId;
-            if (!conv.channelId && channelId) conv.channelId = channelId;
+            if (!conv.channelId && (lineSetting?.channel_id || channelId)) {
+                conv.channelId = lineSetting?.channel_id || channelId;
+            }
             if (!conv.sourceType) conv.sourceType = event.source?.type || null;
             if (!conv.groupId) conv.groupId = event.source?.groupId || null;
             if (!conv.roomId) conv.roomId = event.source?.roomId || null;
@@ -5438,9 +5416,11 @@ async function handleLineMessage(event, userId, channelId) {
             const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
             if (deliverToCustomer) {
                 try {
-                    const creds = getLineCredentials(userId, channelId);
-                    if (creds && creds.channelAccessToken) {
-                        const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret || '' });
+                    const creds = lineSetting ? extractLineCredentials(lineSetting) : getLineCredentials(userId, channelId);
+                    const accessToken = lineSetting ? creds.token : creds?.channelAccessToken;
+                    const secretToken = lineSetting ? creds.secret : creds?.channelSecret;
+                    if (accessToken) {
+                        const client = new Client({ channelAccessToken: accessToken, channelSecret: secretToken || '' });
                         await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
                         aiMessage.deliveryStatus = 'sent';
                     } else {
@@ -5509,7 +5489,7 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         // 如果是 LINE 對話，推送到 LINE
         if (conv.platform === 'line' && conv.customerLineId) {
             try {
-                const creds = getLineCredentials(conv.userId);
+                const creds = getLineCredentials(conv.userId, conv.channelId);
                 if (creds && creds.channelAccessToken) {
                     const client = new Client({ 
                         channelAccessToken: creds.channelAccessToken, 
