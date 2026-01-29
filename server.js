@@ -700,6 +700,55 @@ function findLineSetting(userId, channelId) {
     return byUser[0];
 }
 
+async function verifyLineChannelId(token) {
+    const resp = await axios.get('https://api.line.me/oauth2/v2.1/verify', {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 10000
+    });
+    return String(resp.data?.client_id || '');
+}
+
+async function resolveLineSettingForDestination(userId, destination) {
+    if (!destination) return findLineSetting(userId, null);
+    const cacheKey = `${String(userId)}:${destination}`;
+    const cached = lineDestinationCache.get(cacheKey);
+    if (cached) return cached;
+
+    loadDatabase();
+    const settings = (database.line_api_settings || []).filter(r => String(r.user_id) === String(userId));
+    if (!settings.length) return null;
+
+    const byChannel = settings.find(r => String(r.channel_id || '') === String(destination));
+    if (byChannel) {
+        lineDestinationCache.set(cacheKey, byChannel);
+        return byChannel;
+    }
+
+    for (const record of settings) {
+        const token = decryptSensitive(record.channel_access_token)
+            || record.channel_access_token_plain
+            || record.channel_access_token
+            || '';
+        if (!token) continue;
+        try {
+            const channelId = await verifyLineChannelId(token);
+            if (channelId && channelId === String(destination)) {
+                if (!record.channel_id) {
+                    record.channel_id = channelId;
+                    record.updated_at = new Date().toISOString();
+                    saveDatabase();
+                }
+                lineDestinationCache.set(cacheKey, record);
+                return record;
+            }
+        } catch (_) {
+            continue;
+        }
+    }
+
+    return settings[0];
+}
+
 function getLineCredentials(userId, channelId) {
     const cacheKey = `${String(userId)}:${channelId || 'default'}`;
     // 優先從記憶體快取取得（保存時已放入明文）
@@ -4385,6 +4434,7 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
 
 // LINE API 設定儲存 (用戶專用)
 let lineAPISettings = {}; // 仍保留快取，但以 database.line_api_settings 作持久化
+const lineDestinationCache = new Map();
 
 function normalizeAutoReplyValue(value) {
     if (typeof value === 'boolean') return value;
@@ -4812,7 +4862,7 @@ app.post('/api/webhook/line/:userId', async (req, res) => {
         
         // 檢查頻道是否啟用
         loadDatabase();
-        const lineSetting = findLineSetting(userId, destination);
+        const lineSetting = await resolveLineSettingForDestination(userId, destination);
         if (lineSetting && lineSetting.isActive === false) {
             console.log(`⚠️ LINE 頻道已停用，跳過處理: 用戶 ${userId}`);
             return res.json({ 
