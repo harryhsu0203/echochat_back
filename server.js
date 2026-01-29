@@ -702,7 +702,7 @@ function findLineSetting(userId, channelId) {
 
 async function verifyLineChannelId(token) {
     const resp = await axios.get('https://api.line.me/oauth2/v2.1/verify', {
-        headers: { Authorization: `Bearer ${token}` },
+        params: { access_token: token },
         timeout: 10000
     });
     return String(resp.data?.client_id || '');
