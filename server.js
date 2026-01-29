@@ -4463,6 +4463,7 @@ async function maybeRefreshConversationProfile(conv) {
     try {
         let token = '';
         let secret = '';
+        let channelId = conv.channelId || null;
         if (conv.platform === 'line') {
             const creds = getLineCredentials(conv.userId, conv.channelId);
             token = creds?.channelAccessToken || '';
@@ -4472,6 +4473,47 @@ async function maybeRefreshConversationProfile(conv) {
             const bot = (database.line_bots || []).find(b => b.id === conv.bot_id);
             token = decryptSensitive(bot?.channel_access_token) || bot?.channel_access_token_plain || '';
             secret = decryptSensitive(bot?.channel_secret) || bot?.channel_secret_plain || '';
+        }
+
+        // 若對話未綁定 channelId，嘗試逐一比對使用者的 LINE 設定（只影響該使用者）
+        if (conv.platform === 'line' && (!token || !secret)) {
+            loadDatabase();
+            const settings = (database.line_api_settings || []).filter(r => String(r.user_id) === String(conv.userId));
+            for (const record of settings) {
+                const candidateToken = decryptSensitive(record.channel_access_token)
+                    || record.channel_access_token_plain
+                    || record.channel_access_token
+                    || '';
+                const candidateSecret = decryptSensitive(record.channel_secret)
+                    || record.channel_secret_plain
+                    || record.channel_secret
+                    || '';
+                if (!candidateToken || !candidateSecret) continue;
+                try {
+                    const profile = await fetchLineProfile({
+                        channelAccessToken: candidateToken,
+                        channelSecret: candidateSecret,
+                        sourceType: conv.sourceType,
+                        groupId: conv.groupId,
+                        roomId: conv.roomId,
+                        userId: conv.customerLineId
+                    });
+                    if (profile) {
+                        token = candidateToken;
+                        secret = candidateSecret;
+                        try {
+                            const mappedChannelId = await verifyLineChannelId(candidateToken);
+                            if (mappedChannelId && !record.channel_id) {
+                                record.channel_id = mappedChannelId;
+                                record.updated_at = new Date().toISOString();
+                                saveDatabase();
+                            }
+                            channelId = mappedChannelId || channelId;
+                        } catch (_) {}
+                        break;
+                    }
+                } catch (_) {}
+            }
         }
 
         if (!token || !secret) return false;
@@ -4488,6 +4530,7 @@ async function maybeRefreshConversationProfile(conv) {
         if (!profile) return false;
         conv.customerName = profile.displayName || conv.customerName;
         conv.customerPicture = profile.pictureUrl || conv.customerPicture;
+        if (channelId && !conv.channelId) conv.channelId = channelId;
         conv.profileRefreshedAt = new Date().toISOString();
         return true;
     } catch (error) {
@@ -5330,6 +5373,7 @@ async function handleLineMessage(event, userId, channelId) {
 
         // 若尚未設定自動回覆，預設啟用
         conv.autoReplyEnabled = normalizeAutoReplyValue(conv.autoReplyEnabled);
+        if (!conv.manualOverride) conv.autoReplyEnabled = true;
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
 
@@ -5438,6 +5482,7 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         });
         // 人工回覆即視為接手對話
         conv.autoReplyEnabled = false;
+        conv.manualOverride = true;
         if (!conv.manualModeSince) conv.manualModeSince = nowIso;
         conv.lastManualReplyAt = nowIso;
         conv.updatedAt = nowIso;
@@ -5506,8 +5551,10 @@ app.post('/api/conversation/toggle-auto-reply', authenticateJWT, async (req, res
             delete conv.lastManualReplyAt;
             delete conv.autoReplyRestoredAt;
             delete conv.manualModeRestoredReason;
+            delete conv.manualOverride;
         } else {
             conv.manualModeSince = nowIso;
+            conv.manualOverride = true;
         }
         conv.updatedAt = nowIso;
         saveDatabase();
@@ -5905,6 +5952,7 @@ async function handleLineBotMessage(event, bot) {
 
         // 若尚未設定自動回覆，預設啟用
         conv.autoReplyEnabled = normalizeAutoReplyValue(conv.autoReplyEnabled);
+        if (!conv.manualOverride) conv.autoReplyEnabled = true;
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
 
