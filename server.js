@@ -5435,11 +5435,29 @@ async function handleLineMessage(event, userId, channelId) {
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
 
-            aiMessage.deliveryStatus = 'internal_only';
-            aiMessage.deliveryError = 'hidden_from_customer';
+            const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
+            if (deliverToCustomer) {
+                try {
+                    const creds = getLineCredentials(userId, channelId);
+                    if (creds && creds.channelAccessToken) {
+                        const client = new Client({ channelAccessToken: creds.channelAccessToken, channelSecret: creds.channelSecret || '' });
+                        await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
+                        aiMessage.deliveryStatus = 'sent';
+                    } else {
+                        aiMessage.deliveryStatus = 'failed';
+                        aiMessage.deliveryError = 'missing_credentials';
+                    }
+                } catch (pushErr) {
+                    aiMessage.deliveryStatus = 'failed';
+                    aiMessage.deliveryError = pushErr.message || 'push_failed';
+                }
+            } else {
+                aiMessage.deliveryStatus = 'internal_only';
+                aiMessage.deliveryError = 'hidden_from_customer';
+            }
+
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
-            console.log('📝 AI 回覆僅顯示於後台，未回推給顧客');
             console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
         } else {
             console.log('📝 無回覆內容，不進行回推');
@@ -5978,12 +5996,31 @@ async function handleLineBotMessage(event, bot) {
                 conv.messages.push(aiMessage);
                 conv.updatedAt = new Date().toISOString();
                 saveDatabase();
-                
-                aiMessage.deliveryStatus = 'internal_only';
-                aiMessage.deliveryError = 'hidden_from_customer';
+
+                const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
+                if (deliverToCustomer) {
+                    try {
+                        const token = decryptSensitive(bot.channel_access_token) || bot.channel_access_token_plain || '';
+                        const secret = decryptSensitive(bot.channel_secret) || bot.channel_secret_plain || '';
+                        if (token) {
+                            const client = new Client({ channelAccessToken: token, channelSecret: secret || '' });
+                            await client.pushMessage(sourceUserId, { type: 'text', text: reply });
+                            aiMessage.deliveryStatus = 'sent';
+                        } else {
+                            aiMessage.deliveryStatus = 'failed';
+                            aiMessage.deliveryError = 'missing_credentials';
+                        }
+                    } catch (pushErr) {
+                        aiMessage.deliveryStatus = 'failed';
+                        aiMessage.deliveryError = pushErr.message || 'push_failed';
+                    }
+                } else {
+                    aiMessage.deliveryStatus = 'internal_only';
+                    aiMessage.deliveryError = 'hidden_from_customer';
+                }
+
                 conv.updatedAt = new Date().toISOString();
                 saveDatabase();
-                console.log('📝 AI 回覆僅顯示於後台，未回推給顧客');
             } catch (e) {
                 console.warn('❌ 生成 AI 回覆失敗:', e.message);
             }
