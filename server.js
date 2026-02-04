@@ -597,6 +597,12 @@ app.use(express.json({ limit: '200kb' }));
 app.use(express.urlencoded({ extended: true, limit: '200kb' }));
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
+
 // ========= 敏感資訊加解密（AES-256-GCM） =========
 function getEncryptionKey() {
     const secret = process.env.LINE_SECRET_KEY;
@@ -638,6 +644,86 @@ function decryptSensitive(encText) {
         console.warn('解密失敗，將回退為空值:', e.message);
         return null;
     }
+}
+
+function inferFileExtension(contentType, fallback = '') {
+    if (!contentType) return fallback || '';
+    const type = contentType.toLowerCase();
+    if (type.includes('image/jpeg')) return '.jpg';
+    if (type.includes('image/png')) return '.png';
+    if (type.includes('image/webp')) return '.webp';
+    if (type.includes('image/gif')) return '.gif';
+    if (type.includes('video/mp4')) return '.mp4';
+    if (type.includes('video/quicktime')) return '.mov';
+    if (type.includes('audio/mpeg')) return '.mp3';
+    if (type.includes('audio/ogg')) return '.ogg';
+    if (type.includes('audio/wav')) return '.wav';
+    if (type.includes('application/pdf')) return '.pdf';
+    return fallback || '';
+}
+
+async function downloadToUploads(url, { headers = {}, prefix = 'media', contentTypeHint = '' } = {}) {
+    const resp = await axios.get(url, { headers, responseType: 'stream', timeout: 20000 });
+    const contentType = resp.headers['content-type'] || contentTypeHint || '';
+    const ext = inferFileExtension(contentType, path.extname(url.split('?')[0] || ''));
+    const filename = `${prefix}_${Date.now()}_${uuidv4().slice(0, 8)}${ext || ''}`;
+    const filePath = path.join(uploadsDir, filename);
+    await pipeline(resp.data, fs.createWriteStream(filePath));
+    return `/uploads/${filename}`;
+}
+
+async function downloadLineMessageContent(token, messageId, prefix) {
+    const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
+    return downloadToUploads(url, { headers: { Authorization: `Bearer ${token}` }, prefix });
+}
+
+async function downloadTelegramFile(token, fileId, prefix) {
+    const infoResp = await axios.get(`https://api.telegram.org/bot${token}/getFile`, {
+        params: { file_id: fileId },
+        timeout: 15000
+    });
+    const filePath = infoResp.data?.result?.file_path;
+    if (!filePath) throw new Error('telegram_file_path_missing');
+    const fileUrl = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    return downloadToUploads(fileUrl, { prefix });
+}
+
+async function fetchTelegramProfilePhoto(token, userId) {
+    const resp = await axios.get(`https://api.telegram.org/bot${token}/getUserProfilePhotos`, {
+        params: { user_id: userId, limit: 1 },
+        timeout: 15000
+    });
+    const photos = resp.data?.result?.photos || [];
+    if (!photos.length) return null;
+    const sizes = photos[0];
+    const largest = sizes && sizes.length ? sizes[sizes.length - 1] : null;
+    if (!largest?.file_id) return null;
+    return downloadTelegramFile(token, largest.file_id, 'telegram_avatar');
+}
+
+async function downloadWhatsAppMedia(token, mediaId, prefix) {
+    const infoResp = await axios.get(`https://graph.facebook.com/v17.0/${mediaId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 15000
+    });
+    const mediaUrl = infoResp.data?.url;
+    const mimeType = infoResp.data?.mime_type || '';
+    if (!mediaUrl) throw new Error('whatsapp_media_url_missing');
+    return downloadToUploads(mediaUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+        prefix,
+        contentTypeHint: mimeType
+    });
+}
+
+async function fetchSlackUserProfile(token, userId) {
+    const resp = await axios.get('https://slack.com/api/users.info', {
+        params: { user: userId },
+        headers: { Authorization: `Bearer ${token}` },
+        timeout: 12000
+    });
+    if (!resp.data?.ok) return null;
+    return resp.data?.user?.profile || null;
 }
 
 // 取得使用者的 AI 助理配置（每帳號）
@@ -4955,7 +5041,58 @@ app.post('/api/webhook/slack/:userId', async (req, res) => {
                 conv = { id: convId, userId, platform: 'slack', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
                 database.chat_history.push(conv);
             }
-            conv.messages.push({ role: 'user', content: event.text || '', timestamp: new Date().toISOString() });
+            const slackChannel = findUserChannel(parseInt(userId), 'slack');
+            const slackToken = slackChannel?.apiKey || '';
+            if (slackToken && event.user) {
+                try {
+                    const profile = await fetchSlackUserProfile(slackToken, event.user);
+                    if (profile) {
+                        conv.customerName = profile.display_name || profile.real_name || conv.customerName || 'Slack 使用者';
+                        conv.customerPicture = profile.image_72 || profile.image_48 || conv.customerPicture || null;
+                    }
+                } catch (_) {}
+            }
+
+            const attachments = [];
+            let mediaUrl = '';
+            let mediaType = 'text';
+            if (Array.isArray(event.files) && event.files.length) {
+                for (const file of event.files) {
+                    const fileUrl = file.url_private_download || file.url_private || '';
+                    const mime = file.mimetype || '';
+                    const name = file.name || '附件';
+                    let savedUrl = '';
+                    if (fileUrl) {
+                        try {
+                            if (slackToken) {
+                                savedUrl = await downloadToUploads(fileUrl, {
+                                    headers: { Authorization: `Bearer ${slackToken}` },
+                                    prefix: 'slack_file',
+                                    contentTypeHint: mime
+                                });
+                            }
+                        } catch (_) {}
+                    }
+                    attachments.push({
+                        type: mime || 'file',
+                        url: savedUrl || fileUrl,
+                        name
+                    });
+                    if (!mediaUrl && mime.startsWith('image/')) {
+                        mediaUrl = savedUrl || fileUrl;
+                        mediaType = 'image';
+                    }
+                }
+            }
+
+            conv.messages.push({
+                role: 'user',
+                content: event.text || '',
+                timestamp: new Date().toISOString(),
+                type: mediaType,
+                mediaUrl,
+                attachments
+            });
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
 
@@ -4977,8 +5114,8 @@ app.post('/api/webhook/telegram/:userId', async (req, res) => {
     try {
         const { userId } = req.params;
         const body = req.body || {};
-        const msg = body.message || {};
-        if (msg.text) {
+        const msg = body.message || body.edited_message || {};
+        if (msg && Object.keys(msg).length) {
             loadDatabase();
             if (!database.chat_history) database.chat_history = [];
             const convId = `telegram_${userId}_${msg.chat?.id || 'unknown'}`;
@@ -4987,13 +5124,74 @@ app.post('/api/webhook/telegram/:userId', async (req, res) => {
                 conv = { id: convId, userId, platform: 'telegram', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
                 database.chat_history.push(conv);
             }
-            conv.messages.push({ role: 'user', content: msg.text, timestamp: new Date().toISOString() });
+
+            const channel = findUserChannel(parseInt(userId), 'telegram');
+            const telegramToken = channel?.apiKey || '';
+            const from = msg.from || {};
+            const displayName = [from.first_name, from.last_name].filter(Boolean).join(' ') || from.username || 'Telegram 使用者';
+            conv.customerName = conv.customerName || displayName;
+            if (!conv.customerPicture && telegramToken && from.id) {
+                try {
+                    conv.customerPicture = await fetchTelegramProfilePhoto(telegramToken, from.id);
+                } catch (_) {}
+            }
+
+            let content = msg.text || msg.caption || '';
+            let mediaUrl = '';
+            let mediaType = 'text';
+            const attachments = [];
+
+            if (Array.isArray(msg.photo) && msg.photo.length) {
+                const largest = msg.photo[msg.photo.length - 1];
+                if (telegramToken && largest?.file_id) {
+                    try {
+                        mediaUrl = await downloadTelegramFile(telegramToken, largest.file_id, 'telegram_image');
+                        mediaType = 'image';
+                    } catch (_) {}
+                } else {
+                    mediaType = 'image';
+                }
+            } else if (msg.sticker?.file_id) {
+                if (telegramToken) {
+                    try {
+                        mediaUrl = await downloadTelegramFile(telegramToken, msg.sticker.file_id, 'telegram_sticker');
+                        mediaType = 'sticker';
+                    } catch (_) {}
+                } else {
+                    mediaType = 'sticker';
+                }
+            } else if (msg.document?.file_id) {
+                if (telegramToken) {
+                    try {
+                        mediaUrl = await downloadTelegramFile(telegramToken, msg.document.file_id, 'telegram_file');
+                        mediaType = msg.document.mime_type?.startsWith('image/') ? 'image' : 'file';
+                    } catch (_) {
+                        mediaType = 'file';
+                    }
+                } else {
+                    mediaType = 'file';
+                }
+                attachments.push({
+                    type: msg.document.mime_type || 'file',
+                    url: mediaUrl,
+                    name: msg.document.file_name || '附件'
+                });
+            }
+
+            conv.messages.push({
+                role: 'user',
+                content,
+                timestamp: new Date().toISOString(),
+                type: mediaType,
+                mediaUrl,
+                attachments
+            });
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
 
             try {
-                const { reply } = await generateAIReplyForUser(userId, msg.text, true);
-                conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
+                const { reply } = await generateAIReplyForUser(userId, content || '（附件訊息）', true);
+                conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString(), isAutoReply: true });
                 saveDatabase();
             } catch {}
         }
@@ -5009,7 +5207,8 @@ app.post('/api/webhook/discord/:userId', async (req, res) => {
         const { userId } = req.params;
         const body = req.body || {};
         const content = body.content || body.message || '';
-        if (content) {
+        const attachmentsPayload = Array.isArray(body.attachments) ? body.attachments : [];
+        if (content || attachmentsPayload.length) {
             loadDatabase();
             if (!database.chat_history) database.chat_history = [];
             const convId = `discord_${userId}_webhook`;
@@ -5018,7 +5217,28 @@ app.post('/api/webhook/discord/:userId', async (req, res) => {
                 conv = { id: convId, userId, platform: 'discord', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
                 database.chat_history.push(conv);
             }
-            conv.messages.push({ role: 'user', content, timestamp: new Date().toISOString() });
+            const attachments = [];
+            let mediaUrl = '';
+            let mediaType = 'text';
+            for (const att of attachmentsPayload) {
+                const url = att.url || '';
+                const mime = att.content_type || '';
+                const name = att.filename || '附件';
+                attachments.push({ type: mime || 'file', url, name });
+                if (!mediaUrl && mime.startsWith('image/')) {
+                    mediaUrl = url;
+                    mediaType = 'image';
+                }
+            }
+
+            conv.messages.push({
+                role: 'user',
+                content,
+                timestamp: new Date().toISOString(),
+                type: mediaType,
+                mediaUrl,
+                attachments
+            });
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
 
@@ -5047,7 +5267,7 @@ app.post('/api/webhook/messenger/:userId', async (req, res) => {
         const entries = body.entry || [];
         for (const entry of entries) {
             for (const ev of (entry.messaging || [])) {
-                if (ev.message && ev.message.text) {
+                if (ev.message && (ev.message.text || (ev.message.attachments && ev.message.attachments.length))) {
                     loadDatabase();
                     if (!database.chat_history) database.chat_history = [];
                     const sender = ev.sender?.id || 'unknown';
@@ -5057,12 +5277,33 @@ app.post('/api/webhook/messenger/:userId', async (req, res) => {
                         conv = { id: convId, userId, platform: 'messenger', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
                         database.chat_history.push(conv);
                     }
-                    conv.messages.push({ role: 'user', content: ev.message.text, timestamp: new Date().toISOString() });
+                    const attachments = [];
+                    let mediaUrl = '';
+                    let mediaType = 'text';
+                    if (Array.isArray(ev.message.attachments)) {
+                        for (const att of ev.message.attachments) {
+                            const url = att.payload?.url || '';
+                            const type = att.type || 'file';
+                            attachments.push({ type, url, name: type });
+                            if (!mediaUrl && type === 'image') {
+                                mediaUrl = url;
+                                mediaType = 'image';
+                            }
+                        }
+                    }
+                    conv.messages.push({
+                        role: 'user',
+                        content: ev.message.text || '',
+                        timestamp: new Date().toISOString(),
+                        type: mediaType,
+                        mediaUrl,
+                        attachments
+                    });
                     conv.updatedAt = new Date().toISOString();
                     saveDatabase();
 
                     try {
-                        const { reply } = await generateAIReplyForUser(userId, ev.message.text, true);
+                        const { reply } = await generateAIReplyForUser(userId, ev.message.text || '（附件訊息）', true);
                         conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
                         saveDatabase();
                     } catch {}
@@ -5090,26 +5331,46 @@ app.post('/api/webhook/whatsapp/:userId', async (req, res) => {
             for (const change of (entry.changes || [])) {
                 const messages = change.value?.messages || [];
                 for (const msg of messages) {
-                    if (msg.type === 'text' && msg.text?.body) {
-                        loadDatabase();
-                        if (!database.chat_history) database.chat_history = [];
-                        const from = msg.from || 'unknown';
-                        const convId = `whatsapp_${userId}_${from}`;
-                        let conv = database.chat_history.find(c => c.id === convId);
-                        if (!conv) {
-                            conv = { id: convId, userId, platform: 'whatsapp', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-                            database.chat_history.push(conv);
-                        }
-                        conv.messages.push({ role: 'user', content: msg.text.body, timestamp: new Date().toISOString() });
-                        conv.updatedAt = new Date().toISOString();
-                        saveDatabase();
-
-                        try {
-                            const { reply } = await generateAIReplyForUser(userId, msg.text.body, true);
-                            conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString() });
-                            saveDatabase();
-                        } catch {}
+                    if (!msg) continue;
+                    loadDatabase();
+                    if (!database.chat_history) database.chat_history = [];
+                    const from = msg.from || 'unknown';
+                    const convId = `whatsapp_${userId}_${from}`;
+                    let conv = database.chat_history.find(c => c.id === convId);
+                    if (!conv) {
+                        conv = { id: convId, userId, platform: 'whatsapp', messages: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                        database.chat_history.push(conv);
                     }
+
+                    const channel = findUserChannel(parseInt(userId), 'whatsapp');
+                    const waToken = channel?.apiKey || '';
+                    let content = msg.text?.body || msg.caption || '';
+                    let mediaUrl = '';
+                    let mediaType = msg.type || 'text';
+                    if (['image', 'video', 'audio', 'document', 'sticker'].includes(mediaType)) {
+                        const mediaId = msg[mediaType]?.id || msg[mediaType]?.file_id || '';
+                        if (mediaId && waToken) {
+                            try {
+                                mediaUrl = await downloadWhatsAppMedia(waToken, mediaId, `whatsapp_${mediaType}`);
+                            } catch (_) {}
+                        }
+                    }
+
+                    conv.messages.push({
+                        role: 'user',
+                        content,
+                        timestamp: new Date().toISOString(),
+                        type: mediaType,
+                        mediaUrl
+                    });
+                    conv.updatedAt = new Date().toISOString();
+                    saveDatabase();
+
+                    try {
+                        const { reply } = await generateAIReplyForUser(userId, content || '（附件訊息）', true);
+                        conv.messages.push({ role: 'assistant', content: reply, timestamp: new Date().toISOString(), isAutoReply: true });
+                        saveDatabase();
+                    } catch {}
                 }
             }
         }
@@ -5243,16 +5504,17 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
             cacheKey: cacheKey
         });
         
+        const lineCreds = lineSetting ? extractLineCredentials(lineSetting) : getLineCredentials(userId, channelId);
+        const lineAccessToken = lineSetting ? lineCreds.token : lineCreds?.channelAccessToken;
+        const lineSecret = lineSetting ? lineCreds.secret : lineCreds?.channelSecret;
+
         // 取得用戶資料（名稱與照片）
         let displayName = 'LINE 使用者';
         let pictureUrl = null;
         let profileLoaded = false;
         try {
-            const creds = lineSetting ? extractLineCredentials(lineSetting) : getLineCredentials(userId, channelId);
-            const accessToken = lineSetting ? creds.token : creds?.channelAccessToken;
-            const secretToken = lineSetting ? creds.secret : creds?.channelSecret;
-            if (accessToken) {
-                const client = new Client({ channelAccessToken: accessToken, channelSecret: secretToken || '' });
+            if (lineAccessToken) {
+                const client = new Client({ channelAccessToken: lineAccessToken, channelSecret: lineSecret || '' });
                 const sourceType = event.source?.type;
                 let profile = null;
                 if (sourceType === 'group' && event.source?.groupId) {
@@ -5334,11 +5596,26 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
         if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
         if (normalized.stickerUrl) userMessage.stickerUrl = normalized.stickerUrl;
+        if (normalized.stickerUrl) {
+            userMessage.mediaUrl = normalized.stickerUrl;
+            userMessage.mediaType = 'sticker';
+        }
         if (normalized.fileName) userMessage.fileName = normalized.fileName;
         if (normalized.fileSize) userMessage.fileSize = normalized.fileSize;
         if (normalized.address) userMessage.address = normalized.address;
         if (normalized.latitude !== null) userMessage.latitude = normalized.latitude;
         if (normalized.longitude !== null) userMessage.longitude = normalized.longitude;
+        if (['image', 'video', 'audio'].includes(messageType) && messageId && lineAccessToken) {
+            try {
+                const mediaUrl = await downloadLineMessageContent(lineAccessToken, messageId, `line_${messageType}`);
+                if (mediaUrl) {
+                    userMessage.mediaUrl = mediaUrl;
+                    userMessage.mediaType = messageType;
+                }
+            } catch (err) {
+                console.warn('LINE 媒體下載失敗:', err.message);
+            }
+        }
         conv.messages.push(userMessage);
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
@@ -5416,11 +5693,8 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
             const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
             if (deliverToCustomer) {
                 try {
-                    const creds = lineSetting ? extractLineCredentials(lineSetting) : getLineCredentials(userId, channelId);
-                    const accessToken = lineSetting ? creds.token : creds?.channelAccessToken;
-                    const secretToken = lineSetting ? creds.secret : creds?.channelSecret;
-                    if (accessToken) {
-                        const client = new Client({ channelAccessToken: accessToken, channelSecret: secretToken || '' });
+                    if (lineAccessToken) {
+                        const client = new Client({ channelAccessToken: lineAccessToken, channelSecret: lineSecret || '' });
                         await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
                         aiMessage.deliveryStatus = 'sent';
                     } else {
