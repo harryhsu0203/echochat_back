@@ -6426,8 +6426,10 @@ const startServer = async () => {
         
         // 啟動伺服器
         const PORT = process.env.PORT || 3000;
-        app.listen(PORT, () => {
-            console.log('🚀 EchoChat API server is running on port', PORT);
+        const HOST = '0.0.0.0';
+        // Render 需要綁定 0.0.0.0，讓外部健康檢查與 webhook 可連入
+        app.listen(PORT, HOST, () => {
+            console.log('🚀 EchoChat API server is running on', `${HOST}:${PORT}`);
             console.log('📝 API 端點: http://localhost:' + PORT + '/api');
             console.log('🔍 健康檢查: http://localhost:' + PORT + '/api/health');
         });
