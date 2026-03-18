@@ -2657,7 +2657,8 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
                 userId: c.userId || userId,
                 customerName: c.customerName || '未知客戶',
                 displayName: c.displayName || c.customerName || '未知客戶',
-                customerPicture: c.customerPicture || null,
+                customerPicture: c.customerPicture || c.pictureUrl || null,
+                pictureUrl: c.pictureUrl || c.customerPicture || null,
                 lastMessage: (c.messages && c.messages.length)
                     ? (c.messages[c.messages.length - 1].content || '')
                     : (c.content || ''),
@@ -2694,8 +2695,19 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
             ...conv,
             channel: conv.channel || conv.platform || 'line',
             displayName: conv.displayName || conv.customerName || '未知客戶',
-            customerPicture: conv.customerPicture || conv.pictureUrl || null
+            customerPicture: conv.customerPicture || conv.pictureUrl || null,
+            pictureUrl: conv.pictureUrl || conv.customerPicture || null
         };
+        const messages = Array.isArray(normalizedConversation.messages) ? normalizedConversation.messages : [];
+        const assistantMessages = messages.filter((m) => {
+            const role = String(m?.role || '').toLowerCase();
+            const sender = String(m?.sender || '').toLowerCase();
+            const direction = String(m?.direction || '').toLowerCase();
+            return role === 'assistant' || sender === 'assistant' || direction === 'outbound';
+        });
+        console.log('[Conversation API] message count:', messages.length);
+        console.log('[Conversation API] assistant count:', assistantMessages.length);
+        console.log('[Conversation API] last 3 messages:', messages.slice(-3));
         return res.json({ success: true, conversation: normalizedConversation });
     } catch (error) {
         return res.status(500).json({ success: false, error: '無法取得對話詳情' });
@@ -3388,12 +3400,16 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         // 更新對話歷史
         const newMessage = {
             role: 'user',
+            sender: 'user',
+            direction: 'inbound',
             content: message,
             timestamp: new Date().toISOString()
         };
 
         const aiMessage = {
             role: 'assistant',
+            sender: 'assistant',
+            direction: 'outbound',
             content: aiReply,
             timestamp: new Date().toISOString()
         };
@@ -5491,6 +5507,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         const normalized = normalizeLineMessage(message);
         const messageContent = normalized.content || '';
         const messageType = normalized.type || 'unknown';
+        console.log('[LINE webhook] inbound message type:', messageType);
         const messageId = message.id || `${sourceUserId}_${Date.now()}`;
         
         // 生成快取鍵
@@ -5557,8 +5574,11 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
                 id: convId, 
                 userId: parseInt(userId),
                 platform: 'line', 
+                channel: 'line',
                 customerName: displayName,
+                displayName: displayName,
                 customerPicture: pictureUrl,
+                pictureUrl: pictureUrl,
                 customerLineId: sourceUserId,
                 channelId: (lineSetting?.channel_id || channelId) || null,
                 sourceType: event.source?.type || null,
@@ -5573,7 +5593,9 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
             // 更新客戶名稱與照片（僅在成功取得 profile 時更新）
             if (profileLoaded) {
                 conv.customerName = displayName;
+                conv.displayName = displayName;
                 conv.customerPicture = pictureUrl;
+                conv.pictureUrl = pictureUrl;
             }
             conv.customerLineId = sourceUserId;
             if (!conv.channelId && (lineSetting?.channel_id || channelId)) {
@@ -5583,6 +5605,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
             if (!conv.groupId) conv.groupId = event.source?.groupId || null;
             if (!conv.roomId) conv.roomId = event.source?.roomId || null;
             if (!conv.userId) conv.userId = parseInt(userId);
+            if (!conv.channel) conv.channel = 'line';
         }
         
         // 檢查是否已經回覆過相同的訊息（防重複）
@@ -5605,6 +5628,10 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         }
         
         const userMessage = { role: 'user', content: messageContent, timestamp: messageTimestamp, type: messageType };
+        userMessage.sender = 'user';
+        userMessage.direction = 'inbound';
+        userMessage.displayName = displayName;
+        userMessage.pictureUrl = pictureUrl || conv.customerPicture || null;
         if (normalized.stickerId) userMessage.stickerId = normalized.stickerId;
         if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
         if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
@@ -5632,6 +5659,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         conv.messages.push(userMessage);
         conv.updatedAt = new Date().toISOString();
         saveDatabase();
+        console.log('[LINE webhook] inbound message appended:', userMessage);
 
         // 若人工接手過久未回覆，恢復自動回覆
         if (maybeRestoreAutoReply(conv)) {
@@ -5654,6 +5682,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         
         if (autoReplyEnabled) {
             try {
+                console.log('[AI] received user message:', messageContent);
                 console.log('📝 開始生成 AI 回覆');
                 console.log('   userId:', userId, '(type:', typeof userId, ')');
                 console.log('   message:', message.text);
@@ -5664,8 +5693,10 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
                 
                 // 使用對話歷史生成回覆
                 const aiPrompt = messageType === 'text' ? (message.text || messageContent) : messageContent;
+                console.log('[AI] start generating reply');
                 const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, aiPrompt);
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
+                console.log('[AI] generated reply:', reply);
                 replyText = reply;
                 replySuccess = true;
             } catch (e) {
@@ -5694,14 +5725,19 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         if (replyText) {
             const aiMessage = {
                 role: 'assistant',
+                sender: 'assistant',
+                direction: 'outbound',
                 content: replyText,
                 timestamp: new Date().toISOString(),
                 isAutoReply: true,
                 deliveryStatus: 'pending'
             };
+            console.log('[AI] preparing assistant append');
             conv.messages.push(aiMessage);
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
+            console.log('[AI] assistant message appended:', aiMessage);
+            console.log('[AI] saveDatabase completed');
 
             const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
             if (deliverToCustomer) {
@@ -5725,6 +5761,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
 
             conv.updatedAt = new Date().toISOString();
             saveDatabase();
+            console.log('[AI] saveDatabase completed');
             console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
         } else {
             console.log('📝 無回覆內容，不進行回推');
@@ -5761,6 +5798,8 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         // 將人工回覆加入對話記錄
         conv.messages.push({ 
             role: 'assistant', 
+            sender: 'assistant',
+            direction: 'outbound',
             content: message, 
             timestamp: nowIso,
             isManualReply: true
@@ -6110,6 +6149,7 @@ async function handleLineBotMessage(event, bot) {
         const normalized = normalizeLineMessage(message);
         const messageContent = normalized.content || '';
         const messageType = normalized.type || 'unknown';
+        console.log('[LINE webhook] inbound message type:', messageType);
         const messageId = message.id || `${sourceUserId}_${Date.now()}`;
         
         // 生成快取鍵（包含 Bot ID）
@@ -6168,8 +6208,11 @@ async function handleLineBotMessage(event, bot) {
                 bot_id: bot.id,
                 userId: bot.user_id,
                 platform: 'line_bot', 
+                channel: 'line',
                 customerName: displayName,
+                displayName: displayName,
                 customerPicture: pictureUrl,
+                pictureUrl: pictureUrl,
                 customerLineId: sourceUserId,
                 sourceType: event.source?.type || null,
                 groupId: event.source?.groupId || null,
@@ -6185,13 +6228,16 @@ async function handleLineBotMessage(event, bot) {
         } else {
             if (profileLoaded) {
                 conv.customerName = displayName;
+                conv.displayName = displayName;
                 conv.customerPicture = pictureUrl;
+                conv.pictureUrl = pictureUrl;
             }
             conv.customerLineId = sourceUserId;
             if (!conv.sourceType) conv.sourceType = event.source?.type || null;
             if (!conv.groupId) conv.groupId = event.source?.groupId || null;
             if (!conv.roomId) conv.roomId = event.source?.roomId || null;
             if (!conv.userId) conv.userId = bot.user_id;
+            if (!conv.channel) conv.channel = 'line';
         }
         
         // 檢查重複訊息
@@ -6212,6 +6258,10 @@ async function handleLineBotMessage(event, bot) {
         }
         
         const userMessage = { role: 'user', content: messageContent, timestamp: messageTimestamp, type: messageType };
+        userMessage.sender = 'user';
+        userMessage.direction = 'inbound';
+        userMessage.displayName = displayName;
+        userMessage.pictureUrl = pictureUrl || conv.customerPicture || null;
         if (normalized.stickerId) userMessage.stickerId = normalized.stickerId;
         if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
         if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
@@ -6228,6 +6278,7 @@ async function handleLineBotMessage(event, bot) {
         bot.message_count = (bot.message_count || 0) + 1;
         
         saveDatabase();
+        console.log('[LINE webhook] inbound message appended:', userMessage);
         
         // 若人工接手過久未回覆，恢復自動回覆
         if (maybeRestoreAutoReply(conv)) {
@@ -6250,19 +6301,26 @@ async function handleLineBotMessage(event, bot) {
                 
                 // 使用對話歷史生成回覆
                 const aiPrompt = messageType === 'text' ? (message.text || messageContent) : messageContent;
+                console.log('[AI] start generating reply');
                 const { reply } = await generateAIReplyWithHistory(bot.user_id, conv.messages, aiPrompt);
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
+                console.log('[AI] generated reply:', reply);
                 
                 const aiMessage = {
                     role: 'assistant',
+                    sender: 'assistant',
+                    direction: 'outbound',
                     content: reply,
                     timestamp: new Date().toISOString(),
                     isAutoReply: true,
                     deliveryStatus: 'pending'
                 };
+                console.log('[AI] preparing assistant append');
                 conv.messages.push(aiMessage);
                 conv.updatedAt = new Date().toISOString();
                 saveDatabase();
+                console.log('[AI] assistant message appended:', aiMessage);
+                console.log('[AI] saveDatabase completed');
 
                 const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
                 if (deliverToCustomer) {
@@ -6288,6 +6346,7 @@ async function handleLineBotMessage(event, bot) {
 
                 conv.updatedAt = new Date().toISOString();
                 saveDatabase();
+                console.log('[AI] saveDatabase completed');
             } catch (e) {
                 console.warn('❌ 生成 AI 回覆失敗:', e.message);
             }
