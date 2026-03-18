@@ -2622,6 +2622,7 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
     try {
         loadDatabase();
         const userId = req.staff.id;
+        const requestedChannel = String(req.query.channel || '').trim().toLowerCase();
 
         // 過濾屬於該使用者的對話（依 userId 或 id 前綴）
         const belongsToUser = (conv) => {
@@ -2641,15 +2642,21 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
         const list = (database.chat_history || [])
             .filter(belongsToUser)
             .filter((c) => {
-                const platform = String(c.platform || '').toLowerCase();
+                const platform = String(c.channel || c.platform || '').toLowerCase();
                 const id = String(c.id || '');
-                return platform !== 'dashboard' && platform !== 'test' && !id.startsWith('conv_');
+                const isInternal = platform === 'dashboard' || platform === 'test' || id.startsWith('conv_');
+                if (isInternal) return false;
+                if (!requestedChannel) return true;
+                const effectiveChannel = String(c.channel || c.platform || 'line').toLowerCase();
+                return effectiveChannel === requestedChannel;
             })
             .map((c) => ({
                 id: c.id,
                 platform: c.platform || (String(c.id || '').split('_')[0] || 'unknown'),
+                channel: c.channel || c.platform || (String(c.id || '').split('_')[0] || 'line'),
                 userId: c.userId || userId,
                 customerName: c.customerName || '未知客戶',
+                displayName: c.displayName || c.customerName || '未知客戶',
                 customerPicture: c.customerPicture || null,
                 lastMessage: (c.messages && c.messages.length)
                     ? (c.messages[c.messages.length - 1].content || '')
@@ -2683,7 +2690,13 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
         if (!conv) return res.status(404).json({ success: false, error: '對話不存在' });
         const updated = await maybeRefreshConversationProfile(conv);
         if (updated) saveDatabase();
-        return res.json({ success: true, conversation: conv });
+        const normalizedConversation = {
+            ...conv,
+            channel: conv.channel || conv.platform || 'line',
+            displayName: conv.displayName || conv.customerName || '未知客戶',
+            customerPicture: conv.customerPicture || conv.pictureUrl || null
+        };
+        return res.json({ success: true, conversation: normalizedConversation });
     } catch (error) {
         return res.status(500).json({ success: false, error: '無法取得對話詳情' });
     }
