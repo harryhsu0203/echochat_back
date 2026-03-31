@@ -6058,6 +6058,10 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
                 const { reply } = await generateAIReplyWithHistory(userIdInt, conv.messages, aiPrompt);
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 console.log('[AI] generated reply:', reply);
+                // generateAIReplyWithHistory 內部會 loadDatabase，需重新取得目前全域資料中的 conversation 參照
+                loadDatabase();
+                const refreshedConv = (database.chat_history || []).find((c) => c.id === conv.id);
+                if (refreshedConv) conv = refreshedConv;
                 replyText = reply;
                 replySuccess = true;
             } catch (e) {
@@ -6675,6 +6679,10 @@ async function handleLineBotMessage(event, bot) {
                 const { reply } = await generateAIReplyWithHistory(bot.user_id, conv.messages, aiPrompt);
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 console.log('[AI] generated reply:', reply);
+                // generateAIReplyWithHistory 內部會 loadDatabase，需重新取得目前全域資料中的 conversation 參照
+                loadDatabase();
+                const refreshedConv = (database.chat_history || []).find((c) => c.id === conv.id);
+                if (refreshedConv) conv = refreshedConv;
                 
                 const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
                 const token = decryptSensitive(bot.channel_access_token) || bot.channel_access_token_plain || '';
