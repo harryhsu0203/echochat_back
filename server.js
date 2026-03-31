@@ -1129,10 +1129,17 @@ let database = {
     line_api_settings: [], // 每位使用者的 LINE Token 設定
     line_bots: [] // 每位使用者的多個 LINE Bot 設定
 };
+let databaseDirtyInMemory = false;
+let lastSaveFailed = false;
+let lastSaveErrorMessage = '';
 
 // 載入現有資料
 const loadDatabase = () => {
     try {
+        if (lastSaveFailed && databaseDirtyInMemory) {
+            console.warn('⚠️ 上次資料庫寫入失敗，暫時保留記憶體資料，避免讀入舊檔覆蓋新訊息');
+            return;
+        }
         if (fs.existsSync(dataFile)) {
             const data = fs.readFileSync(dataFile, 'utf8');
             const loadedData = JSON.parse(data);
@@ -1164,12 +1171,21 @@ const loadDatabase = () => {
 const saveDatabase = () => {
     try {
         fs.writeFileSync(dataFile, JSON.stringify(database, null, 2));
+        databaseDirtyInMemory = false;
+        lastSaveFailed = false;
+        lastSaveErrorMessage = '';
+        return true;
     } catch (error) {
         console.error('儲存資料庫檔案失敗:', error.message);
+        databaseDirtyInMemory = true;
+        lastSaveFailed = true;
+        lastSaveErrorMessage = error.message || 'unknown_save_error';
+        recordDebugEvent('database_save_failed', { error: lastSaveErrorMessage });
         // 在生產環境中，如果無法寫入文件，我們繼續運行而不拋出錯誤
         if (process.env.NODE_ENV === 'production') {
             console.log('⚠️ 生產環境中無法寫入文件，但服務器將繼續運行');
         }
+        return false;
     }
 };
 
@@ -2794,6 +2810,11 @@ app.get('/api/debug/events', authenticateJWT, (req, res) => {
     return res.json({
         success: true,
         count: events.length,
+        saveState: {
+            databaseDirtyInMemory,
+            lastSaveFailed,
+            lastSaveErrorMessage: lastSaveErrorMessage || null
+        },
         events
     });
 });
