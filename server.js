@@ -1119,6 +1119,7 @@ let database = {
     knowledge: [],
     user_states: [],
     chat_history: [],
+    line_profiles: [],
     channels: [],
     ai_assistant_configs: [],
     ai_settings: [],
@@ -1143,6 +1144,7 @@ const loadDatabase = () => {
                 knowledge: loadedData.knowledge || [],
                 user_states: loadedData.user_states || [],
                 chat_history: loadedData.chat_history || [],
+                line_profiles: loadedData.line_profiles || [],
                 channels: loadedData.channels || [],
                 ai_assistant_configs: loadedData.ai_assistant_configs || [],
                 ai_settings: loadedData.ai_settings || [],
@@ -2651,12 +2653,21 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
                 return effectiveChannel === requestedChannel;
             })
             .map((c) => ({
+                ...(() => {
+                    const profile = getLineProfileFromStore(c.customerLineId);
+                    const profilePicture = profile?.pictureUrl || null;
+                    const profileName = profile?.displayName || '';
+                    return {
+                        _profilePicture: profilePicture,
+                        _profileName: profileName
+                    };
+                })(),
                 id: c.id,
                 platform: c.platform || (String(c.id || '').split('_')[0] || 'unknown'),
                 channel: c.channel || c.platform || (String(c.id || '').split('_')[0] || 'line'),
                 userId: c.userId || userId,
                 customerName: c.customerName || '未知客戶',
-                displayName: c.displayName || c.customerName || '未知客戶',
+                displayName: c.displayName || c.customerName || '',
                 customerPicture: c.customerPicture || c.pictureUrl || null,
                 pictureUrl: c.pictureUrl || c.customerPicture || null,
                 lastMessage: (c.messages && c.messages.length)
@@ -2665,6 +2676,13 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
                 messageCount: (c.messages && c.messages.length) || 0,
                 updatedAt: c.updatedAt || new Date().toISOString()
             }))
+            .map((c) => ({
+                ...c,
+                displayName: c.displayName || c._profileName || c.customerName || '未知客戶',
+                customerPicture: c._profilePicture || c.customerPicture || null,
+                pictureUrl: c._profilePicture || c.pictureUrl || c.customerPicture || null
+            }))
+            .map(({ _profilePicture, _profileName, ...rest }) => rest)
             .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
 
         // 為保持前端相容性，直接回傳陣列（不包 success）
@@ -2698,6 +2716,14 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
             customerPicture: conv.customerPicture || conv.pictureUrl || null,
             pictureUrl: conv.pictureUrl || conv.customerPicture || null
         };
+        const profile = getLineProfileFromStore(conv.customerLineId);
+        if (profile?.displayName && !normalizedConversation.displayName) {
+            normalizedConversation.displayName = profile.displayName;
+        }
+        if (profile?.pictureUrl) {
+            normalizedConversation.customerPicture = profile.pictureUrl;
+            normalizedConversation.pictureUrl = profile.pictureUrl;
+        }
         const messages = Array.isArray(normalizedConversation.messages) ? normalizedConversation.messages : [];
         const assistantMessages = messages.filter((m) => {
             const role = String(m?.role || '').toLowerCase();
@@ -4582,6 +4608,56 @@ async function fetchLineProfile({ channelAccessToken, channelSecret, sourceType,
     return client.getProfile(userId);
 }
 
+async function getLineProfile(lineUserId, channelAccessToken) {
+    if (!lineUserId) return null;
+    const token = channelAccessToken || process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+    if (!token) return null;
+    try {
+        const resp = await axios.get(`https://api.line.me/v2/bot/profile/${encodeURIComponent(lineUserId)}`, {
+            headers: {
+                Authorization: `Bearer ${token}`
+            },
+            timeout: 10000
+        });
+        const profile = resp.data || {};
+        return {
+            lineUserId: String(lineUserId),
+            displayName: profile.displayName || 'LINE 使用者',
+            pictureUrl: profile.pictureUrl || null,
+            updatedAt: new Date().toISOString()
+        };
+    } catch (error) {
+        console.warn('[LINE profile] getLineProfile failed:', error?.response?.status || error.message);
+        return null;
+    }
+}
+
+function upsertLineProfile(profile) {
+    if (!profile?.lineUserId) return null;
+    if (!Array.isArray(database.line_profiles)) database.line_profiles = [];
+    const idx = database.line_profiles.findIndex((p) => String(p.lineUserId) === String(profile.lineUserId));
+    const record = {
+        lineUserId: String(profile.lineUserId),
+        displayName: profile.displayName || 'LINE 使用者',
+        pictureUrl: profile.pictureUrl || null,
+        updatedAt: profile.updatedAt || new Date().toISOString()
+    };
+    if (idx >= 0) {
+        database.line_profiles[idx] = {
+            ...database.line_profiles[idx],
+            ...record
+        };
+    } else {
+        database.line_profiles.push(record);
+    }
+    return record;
+}
+
+function getLineProfileFromStore(lineUserId) {
+    if (!lineUserId || !Array.isArray(database.line_profiles)) return null;
+    return database.line_profiles.find((p) => String(p.lineUserId) === String(lineUserId)) || null;
+}
+
 async function maybeRefreshConversationProfile(conv) {
     if (!conv || !conv.customerLineId) return false;
     const needsName = !conv.customerName || conv.customerName === 'LINE 使用者';
@@ -4619,6 +4695,14 @@ async function maybeRefreshConversationProfile(conv) {
         if (!profile) return false;
         conv.customerName = profile.displayName || conv.customerName;
         conv.customerPicture = profile.pictureUrl || conv.customerPicture;
+        conv.displayName = conv.customerName || conv.displayName || 'LINE 使用者';
+        conv.pictureUrl = conv.customerPicture || conv.pictureUrl || null;
+        upsertLineProfile({
+            lineUserId: conv.customerLineId,
+            displayName: conv.customerName,
+            pictureUrl: conv.customerPicture,
+            updatedAt: new Date().toISOString()
+        });
         if (channelId && !conv.channelId) conv.channelId = channelId;
         conv.profileRefreshedAt = new Date().toISOString();
         return true;
@@ -5563,6 +5647,24 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         } catch (profileErr) {
             console.warn('無法取得 LINE 用戶資料:', profileErr.message);
         }
+
+        // 1:1 對話時，直接使用 LINE Profile API 補強資料（失敗不影響主流程）
+        let storedLineProfile = null;
+        if (event.source?.type === 'user' && sourceUserId) {
+            const profileFromApi = await getLineProfile(sourceUserId, lineAccessToken);
+            if (profileFromApi) {
+                displayName = profileFromApi.displayName || displayName;
+                pictureUrl = profileFromApi.pictureUrl || pictureUrl;
+                storedLineProfile = upsertLineProfile(profileFromApi);
+            } else {
+                storedLineProfile = upsertLineProfile({
+                    lineUserId: sourceUserId,
+                    displayName,
+                    pictureUrl,
+                    updatedAt: new Date().toISOString()
+                });
+            }
+        }
         
         // 寫入使用者專屬對話記錄（依 userId 隔離）
         loadDatabase();
@@ -5577,8 +5679,8 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
                 channel: 'line',
                 customerName: displayName,
                 displayName: displayName,
-                customerPicture: pictureUrl,
-                pictureUrl: pictureUrl,
+                customerPicture: storedLineProfile?.pictureUrl || pictureUrl || null,
+                pictureUrl: storedLineProfile?.pictureUrl || pictureUrl || null,
                 customerLineId: sourceUserId,
                 channelId: (lineSetting?.channel_id || channelId) || null,
                 sourceType: event.source?.type || null,
@@ -5591,11 +5693,11 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
             database.chat_history.push(conv);
         } else {
             // 更新客戶名稱與照片（僅在成功取得 profile 時更新）
-            if (profileLoaded) {
+            if (profileLoaded || storedLineProfile) {
                 conv.customerName = displayName;
                 conv.displayName = displayName;
-                conv.customerPicture = pictureUrl;
-                conv.pictureUrl = pictureUrl;
+                conv.customerPicture = storedLineProfile?.pictureUrl || pictureUrl || conv.customerPicture || null;
+                conv.pictureUrl = storedLineProfile?.pictureUrl || pictureUrl || conv.pictureUrl || null;
             }
             conv.customerLineId = sourceUserId;
             if (!conv.channelId && (lineSetting?.channel_id || channelId)) {
@@ -5630,8 +5732,8 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         const userMessage = { role: 'user', content: messageContent, timestamp: messageTimestamp, type: messageType };
         userMessage.sender = 'user';
         userMessage.direction = 'inbound';
-        userMessage.displayName = displayName;
-        userMessage.pictureUrl = pictureUrl || conv.customerPicture || null;
+        userMessage.displayName = storedLineProfile?.displayName || displayName;
+        userMessage.pictureUrl = storedLineProfile?.pictureUrl || pictureUrl || conv.customerPicture || null;
         if (normalized.stickerId) userMessage.stickerId = normalized.stickerId;
         if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
         if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
@@ -6171,9 +6273,11 @@ async function handleLineBotMessage(event, bot) {
         let displayName = 'LINE 使用者';
         let pictureUrl = null;
         let profileLoaded = false;
+        let botToken = '';
         try {
             const token = decryptSensitive(bot.channel_access_token);
             const secret = decryptSensitive(bot.channel_secret);
+            botToken = token || '';
             
             if (token && secret) {
                 const client = new Client({ channelAccessToken: token, channelSecret: secret });
@@ -6195,6 +6299,23 @@ async function handleLineBotMessage(event, bot) {
         } catch (profileErr) {
             console.warn('無法取得 LINE 用戶資料:', profileErr.message);
         }
+
+        let storedLineProfile = null;
+        if (event.source?.type === 'user' && sourceUserId) {
+            const profileFromApi = await getLineProfile(sourceUserId, botToken);
+            if (profileFromApi) {
+                displayName = profileFromApi.displayName || displayName;
+                pictureUrl = profileFromApi.pictureUrl || pictureUrl;
+                storedLineProfile = upsertLineProfile(profileFromApi);
+            } else {
+                storedLineProfile = upsertLineProfile({
+                    lineUserId: sourceUserId,
+                    displayName,
+                    pictureUrl,
+                    updatedAt: new Date().toISOString()
+                });
+            }
+        }
         
         // 寫入對話記錄
         loadDatabase();
@@ -6211,8 +6332,8 @@ async function handleLineBotMessage(event, bot) {
                 channel: 'line',
                 customerName: displayName,
                 displayName: displayName,
-                customerPicture: pictureUrl,
-                pictureUrl: pictureUrl,
+                customerPicture: storedLineProfile?.pictureUrl || pictureUrl || null,
+                pictureUrl: storedLineProfile?.pictureUrl || pictureUrl || null,
                 customerLineId: sourceUserId,
                 sourceType: event.source?.type || null,
                 groupId: event.source?.groupId || null,
@@ -6226,11 +6347,11 @@ async function handleLineBotMessage(event, bot) {
             // 更新 Bot 的對話計數
             bot.conversation_count = (bot.conversation_count || 0) + 1;
         } else {
-            if (profileLoaded) {
+            if (profileLoaded || storedLineProfile) {
                 conv.customerName = displayName;
                 conv.displayName = displayName;
-                conv.customerPicture = pictureUrl;
-                conv.pictureUrl = pictureUrl;
+                conv.customerPicture = storedLineProfile?.pictureUrl || pictureUrl || conv.customerPicture || null;
+                conv.pictureUrl = storedLineProfile?.pictureUrl || pictureUrl || conv.pictureUrl || null;
             }
             conv.customerLineId = sourceUserId;
             if (!conv.sourceType) conv.sourceType = event.source?.type || null;
@@ -6260,8 +6381,8 @@ async function handleLineBotMessage(event, bot) {
         const userMessage = { role: 'user', content: messageContent, timestamp: messageTimestamp, type: messageType };
         userMessage.sender = 'user';
         userMessage.direction = 'inbound';
-        userMessage.displayName = displayName;
-        userMessage.pictureUrl = pictureUrl || conv.customerPicture || null;
+        userMessage.displayName = storedLineProfile?.displayName || displayName;
+        userMessage.pictureUrl = storedLineProfile?.pictureUrl || pictureUrl || conv.customerPicture || null;
         if (normalized.stickerId) userMessage.stickerId = normalized.stickerId;
         if (normalized.stickerPackageId) userMessage.stickerPackageId = normalized.stickerPackageId;
         if (normalized.stickerResourceType) userMessage.stickerResourceType = normalized.stickerResourceType;
