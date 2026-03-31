@@ -2620,7 +2620,7 @@ app.post('/api/payment/ecpay/return', express.urlencoded({ extended: false }), (
 });
 
 // 對話列表（讀取實際 chat_history，僅顯示當前使用者相關）
-app.get('/api/conversations', authenticateJWT, (req, res) => {
+app.get('/api/conversations', authenticateJWT, async (req, res) => {
     try {
         loadDatabase();
         const userId = req.staff.id;
@@ -2641,7 +2641,7 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
             );
         };
 
-        const list = (database.chat_history || [])
+        const filteredConversations = (database.chat_history || [])
             .filter(belongsToUser)
             .filter((c) => {
                 const platform = String(c.channel || c.platform || '').toLowerCase();
@@ -2651,14 +2651,23 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
                 if (!requestedChannel) return true;
                 const effectiveChannel = String(c.channel || c.platform || 'line').toLowerCase();
                 return effectiveChannel === requestedChannel;
-            })
+            });
+
+        let didBackfill = false;
+        for (const conv of filteredConversations) {
+            const changed = await backfillConversationProfileIfNeeded(conv);
+            if (changed) didBackfill = true;
+        }
+        if (didBackfill) saveDatabase();
+
+        const list = filteredConversations
             .map((c) => ({
                 ...(() => {
                     const profile = getLineProfileFromStore(c.customerLineId);
-                    const profilePicture = profile?.pictureUrl || null;
+                    const profilePicture = normalizePictureUrl(profile?.pictureUrl || '');
                     const profileName = profile?.displayName || '';
                     return {
-                        _profilePicture: profilePicture,
+                        _profilePicture: profilePicture || null,
                         _profileName: profileName
                     };
                 })(),
@@ -2668,8 +2677,9 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
                 userId: c.userId || userId,
                 customerName: c.customerName || '未知客戶',
                 displayName: c.displayName || c.customerName || '',
-                customerPicture: c.customerPicture || c.pictureUrl || null,
-                pictureUrl: c.pictureUrl || c.customerPicture || null,
+                customerLineId: c.customerLineId || null,
+                customerPicture: normalizePictureUrl(c.customerPicture || c.pictureUrl || '') || null,
+                pictureUrl: normalizePictureUrl(c.pictureUrl || c.customerPicture || '') || null,
                 lastMessage: (c.messages && c.messages.length)
                     ? (c.messages[c.messages.length - 1].content || '')
                     : (c.content || ''),
@@ -2679,11 +2689,20 @@ app.get('/api/conversations', authenticateJWT, (req, res) => {
             .map((c) => ({
                 ...c,
                 displayName: c.displayName || c._profileName || c.customerName || '未知客戶',
-                customerPicture: c._profilePicture || c.customerPicture || null,
-                pictureUrl: c._profilePicture || c.pictureUrl || c.customerPicture || null
+                customerPicture: normalizePictureUrl(c._profilePicture || c.customerPicture || '') || null,
+                pictureUrl: normalizePictureUrl(c._profilePicture || c.pictureUrl || c.customerPicture || '') || null
             }))
             .map(({ _profilePicture, _profileName, ...rest }) => rest)
             .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+
+        list.slice(0, 5).forEach((conv) => {
+            console.log('[Conversation API list]', {
+                conversationId: conv.id,
+                customerLineId: conv.customerLineId || null,
+                customerPicture: conv.customerPicture || null,
+                pictureUrl: conv.pictureUrl || null
+            });
+        });
 
         // 為保持前端相容性，直接回傳陣列（不包 success）
         return res.json(list);
@@ -2713,16 +2732,17 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
             ...conv,
             channel: conv.channel || conv.platform || 'line',
             displayName: conv.displayName || conv.customerName || '未知客戶',
-            customerPicture: conv.customerPicture || conv.pictureUrl || null,
-            pictureUrl: conv.pictureUrl || conv.customerPicture || null
+            customerPicture: normalizePictureUrl(conv.customerPicture || conv.pictureUrl || '') || null,
+            pictureUrl: normalizePictureUrl(conv.pictureUrl || conv.customerPicture || '') || null
         };
         const profile = getLineProfileFromStore(conv.customerLineId);
         if (profile?.displayName && !normalizedConversation.displayName) {
             normalizedConversation.displayName = profile.displayName;
         }
         if (profile?.pictureUrl) {
-            normalizedConversation.customerPicture = profile.pictureUrl;
-            normalizedConversation.pictureUrl = profile.pictureUrl;
+            const profilePic = normalizePictureUrl(profile.pictureUrl);
+            normalizedConversation.customerPicture = profilePic || normalizedConversation.customerPicture;
+            normalizedConversation.pictureUrl = profilePic || normalizedConversation.pictureUrl;
         }
         const messages = Array.isArray(normalizedConversation.messages) ? normalizedConversation.messages : [];
         const assistantMessages = messages.filter((m) => {
@@ -2733,6 +2753,13 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
         });
         console.log('[Conversation API] message count:', messages.length);
         console.log('[Conversation API] assistant count:', assistantMessages.length);
+        console.log('[Conversation API detail] customerPicture:', normalizedConversation.customerPicture || null);
+        console.log('[Conversation API detail] first 3 message shape:', messages.slice(0, 3).map((m) => ({
+            sender: m?.sender || '',
+            direction: m?.direction || '',
+            type: m?.type || '',
+            pictureUrl: m?.pictureUrl || ''
+        })));
         console.log('[Conversation API] last 3 messages:', messages.slice(-3));
         return res.json({ success: true, conversation: normalizedConversation });
     } catch (error) {
@@ -4658,6 +4685,51 @@ function getLineProfileFromStore(lineUserId) {
     return database.line_profiles.find((p) => String(p.lineUserId) === String(lineUserId)) || null;
 }
 
+function normalizePictureUrl(value) {
+    if (!value) return '';
+    const str = String(value).trim();
+    if (!str) return '';
+    const lower = str.toLowerCase();
+    if (lower === 'null' || lower === 'undefined' || lower === 'nan') return '';
+    return str;
+}
+
+async function backfillConversationProfileIfNeeded(conv) {
+    if (!conv || !conv.customerLineId) return false;
+    const hasPicture = !!normalizePictureUrl(conv.customerPicture || conv.pictureUrl || '');
+    if (hasPicture) return false;
+    const profileFromStore = getLineProfileFromStore(conv.customerLineId);
+    if (normalizePictureUrl(profileFromStore?.pictureUrl)) {
+        conv.customerPicture = profileFromStore.pictureUrl;
+        conv.pictureUrl = profileFromStore.pictureUrl;
+        if (!conv.displayName) conv.displayName = profileFromStore.displayName || conv.customerName || 'LINE 使用者';
+        conv.updatedAt = new Date().toISOString();
+        return true;
+    }
+    try {
+        let token = '';
+        if (conv.platform === 'line') {
+            const setting = await resolveLineSettingForDestination(conv.userId, conv.channelId);
+            token = extractLineCredentials(setting).token;
+        } else if (conv.platform === 'line_bot' && conv.bot_id) {
+            const bot = (database.line_bots || []).find((b) => b.id === conv.bot_id);
+            token = decryptSensitive(bot?.channel_access_token) || bot?.channel_access_token_plain || '';
+        }
+        const profile = await getLineProfile(conv.customerLineId, token);
+        if (!profile) return false;
+        const upserted = upsertLineProfile(profile);
+        conv.customerName = upserted?.displayName || conv.customerName || 'LINE 使用者';
+        conv.displayName = upserted?.displayName || conv.displayName || conv.customerName;
+        conv.customerPicture = upserted?.pictureUrl || conv.customerPicture || null;
+        conv.pictureUrl = upserted?.pictureUrl || conv.pictureUrl || conv.customerPicture || null;
+        conv.updatedAt = new Date().toISOString();
+        return true;
+    } catch (error) {
+        console.warn('[LINE profile] backfill failed:', error.message);
+        return false;
+    }
+}
+
 async function maybeRefreshConversationProfile(conv) {
     if (!conv || !conv.customerLineId) return false;
     const needsName = !conv.customerName || conv.customerName === 'LINE 使用者';
@@ -5530,6 +5602,31 @@ function maybeRestoreAutoReply(conversation) {
     return true;
 }
 
+function appendOutboundConversationMessage(conversation, payload) {
+    const nowIso = new Date().toISOString();
+    const msg = {
+        id: payload?.id || `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        conversationId: conversation?.id || '',
+        customerLineId: conversation?.customerLineId || '',
+        role: 'assistant',
+        sender: payload?.sender || 'ai',
+        direction: 'outbound',
+        type: payload?.type || 'text',
+        text: payload?.text || '',
+        content: payload?.text || '',
+        platform: conversation?.platform || 'line',
+        channel: conversation?.channel || 'line',
+        timestamp: nowIso,
+        createdAt: nowIso,
+        isAutoReply: !!payload?.isAutoReply,
+        isManualReply: !!payload?.isManualReply
+    };
+    if (!Array.isArray(conversation.messages)) conversation.messages = [];
+    conversation.messages.push(msg);
+    conversation.updatedAt = nowIso;
+    return msg;
+}
+
 function normalizeLineMessage(lineMessage) {
     const type = String(lineMessage?.type || '').toLowerCase();
     if (type === 'text') {
@@ -5652,6 +5749,12 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         let storedLineProfile = null;
         if (event.source?.type === 'user' && sourceUserId) {
             const profileFromApi = await getLineProfile(sourceUserId, lineAccessToken);
+            console.log('[LINE inbound profile]', {
+                sourceUserId,
+                getLineProfileSuccess: !!profileFromApi,
+                displayName: profileFromApi?.displayName || '',
+                pictureUrl: profileFromApi?.pictureUrl || ''
+            });
             if (profileFromApi) {
                 displayName = profileFromApi.displayName || displayName;
                 pictureUrl = profileFromApi.pictureUrl || pictureUrl;
@@ -5664,6 +5767,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
                     updatedAt: new Date().toISOString()
                 });
             }
+            console.log('[LINE inbound profile upsert result]', getLineProfileFromStore(sourceUserId));
         }
         
         // 寫入使用者專屬對話記錄（依 userId 隔離）
@@ -5825,21 +5929,19 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         
         // 只有在有回覆內容時才回推
         if (replyText) {
-            const aiMessage = {
-                role: 'assistant',
-                sender: 'assistant',
-                direction: 'outbound',
-                content: replyText,
-                timestamp: new Date().toISOString(),
-                isAutoReply: true,
-                deliveryStatus: 'pending'
-            };
+            const aiMessage = appendOutboundConversationMessage(conv, {
+                text: replyText,
+                sender: 'ai',
+                type: 'text',
+                isAutoReply: true
+            });
+            aiMessage.deliveryStatus = 'pending';
             console.log('[AI] preparing assistant append');
-            conv.messages.push(aiMessage);
-            conv.updatedAt = new Date().toISOString();
             saveDatabase();
             console.log('[AI] assistant message appended:', aiMessage);
             console.log('[AI] saveDatabase completed');
+            console.log('[AI] wrote to chat_history/messages:', Array.isArray(conv.messages));
+            console.log('[AI] conversation last message:', conv.messages[conv.messages.length - 1] || null);
 
             const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
             if (deliverToCustomer) {
@@ -5898,12 +6000,10 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         const nowIso = new Date().toISOString();
 
         // 將人工回覆加入對話記錄
-        conv.messages.push({ 
-            role: 'assistant', 
-            sender: 'assistant',
-            direction: 'outbound',
-            content: message, 
-            timestamp: nowIso,
+        const manualMessage = appendOutboundConversationMessage(conv, {
+            text: message,
+            sender: 'human',
+            type: 'text',
             isManualReply: true
         });
         // 人工回覆即視為接手對話
@@ -5913,6 +6013,7 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         conv.lastManualReplyAt = nowIso;
         conv.updatedAt = nowIso;
         saveDatabase();
+        console.log('[Manual] outbound message appended:', manualMessage);
         
         // 如果是 LINE 對話，推送到 LINE
         if (conv.platform === 'line' && conv.customerLineId) {
@@ -6303,6 +6404,12 @@ async function handleLineBotMessage(event, bot) {
         let storedLineProfile = null;
         if (event.source?.type === 'user' && sourceUserId) {
             const profileFromApi = await getLineProfile(sourceUserId, botToken);
+            console.log('[LINE inbound profile]', {
+                sourceUserId,
+                getLineProfileSuccess: !!profileFromApi,
+                displayName: profileFromApi?.displayName || '',
+                pictureUrl: profileFromApi?.pictureUrl || ''
+            });
             if (profileFromApi) {
                 displayName = profileFromApi.displayName || displayName;
                 pictureUrl = profileFromApi.pictureUrl || pictureUrl;
@@ -6315,6 +6422,7 @@ async function handleLineBotMessage(event, bot) {
                     updatedAt: new Date().toISOString()
                 });
             }
+            console.log('[LINE inbound profile upsert result]', getLineProfileFromStore(sourceUserId));
         }
         
         // 寫入對話記錄
@@ -6427,18 +6535,14 @@ async function handleLineBotMessage(event, bot) {
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 console.log('[AI] generated reply:', reply);
                 
-                const aiMessage = {
-                    role: 'assistant',
-                    sender: 'assistant',
-                    direction: 'outbound',
-                    content: reply,
-                    timestamp: new Date().toISOString(),
-                    isAutoReply: true,
-                    deliveryStatus: 'pending'
-                };
+                const aiMessage = appendOutboundConversationMessage(conv, {
+                    text: reply,
+                    sender: 'ai',
+                    type: 'text',
+                    isAutoReply: true
+                });
+                aiMessage.deliveryStatus = 'pending';
                 console.log('[AI] preparing assistant append');
-                conv.messages.push(aiMessage);
-                conv.updatedAt = new Date().toISOString();
                 saveDatabase();
                 console.log('[AI] assistant message appended:', aiMessage);
                 console.log('[AI] saveDatabase completed');
