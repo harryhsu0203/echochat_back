@@ -2699,6 +2699,14 @@ app.get('/api/conversations', authenticateJWT, async (req, res) => {
             console.log('[Conversation API list]', {
                 conversationId: conv.id,
                 customerLineId: conv.customerLineId || null,
+                displayName: conv.displayName || null,
+                customerPicture: conv.customerPicture || null,
+                pictureUrl: conv.pictureUrl || null
+            });
+            recordDebugEvent('conversation_list_item', {
+                conversationId: conv.id,
+                customerLineId: conv.customerLineId || null,
+                displayName: conv.displayName || null,
                 customerPicture: conv.customerPicture || null,
                 pictureUrl: conv.pictureUrl || null
             });
@@ -2760,11 +2768,34 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
             type: m?.type || '',
             pictureUrl: m?.pictureUrl || ''
         })));
+        recordDebugEvent('conversation_detail', {
+            conversationId: normalizedConversation.id,
+            customerLineId: normalizedConversation.customerLineId || null,
+            customerPicture: normalizedConversation.customerPicture || null,
+            first3Messages: messages.slice(0, 3).map((m) => ({
+                sender: m?.sender || '',
+                direction: m?.direction || '',
+                type: m?.type || '',
+                pictureUrl: m?.pictureUrl || ''
+            }))
+        });
         console.log('[Conversation API] last 3 messages:', messages.slice(-3));
         return res.json({ success: true, conversation: normalizedConversation });
     } catch (error) {
         return res.status(500).json({ success: false, error: '無法取得對話詳情' });
     }
+});
+
+// Debug events (JWT protected): used to verify avatar / AI flow end-to-end
+app.get('/api/debug/events', authenticateJWT, (req, res) => {
+    const limitRaw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 200) : 100;
+    const events = debugEvents.slice(-limit);
+    return res.json({
+        success: true,
+        count: events.length,
+        events
+    });
 });
 
 // 帳號管理 API
@@ -4603,6 +4634,20 @@ app.get('/api/billing/plans', authenticateJWT, (req, res) => {
 // LINE API 設定儲存 (用戶專用)
 let lineAPISettings = {}; // 仍保留快取，但以 database.line_api_settings 作持久化
 const lineDestinationCache = new Map();
+const debugEvents = [];
+
+function recordDebugEvent(tag, data) {
+    try {
+        debugEvents.push({
+            ts: new Date().toISOString(),
+            tag,
+            data
+        });
+        if (debugEvents.length > 200) {
+            debugEvents.splice(0, debugEvents.length - 200);
+        }
+    } catch (_) {}
+}
 
 function normalizeAutoReplyValue(value) {
     if (typeof value === 'boolean') return value;
@@ -4638,7 +4683,16 @@ async function fetchLineProfile({ channelAccessToken, channelSecret, sourceType,
 async function getLineProfile(lineUserId, channelAccessToken) {
     if (!lineUserId) return null;
     const token = channelAccessToken || process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
-    if (!token) return null;
+    if (!token) {
+        recordDebugEvent('line_profile_fetch', {
+            lineUserId: String(lineUserId),
+            tokenExists: false,
+            success: false,
+            statusCode: null,
+            reason: 'missing_access_token'
+        });
+        return null;
+    }
     try {
         const resp = await axios.get(`https://api.line.me/v2/bot/profile/${encodeURIComponent(lineUserId)}`, {
             headers: {
@@ -4647,6 +4701,14 @@ async function getLineProfile(lineUserId, channelAccessToken) {
             timeout: 10000
         });
         const profile = resp.data || {};
+        recordDebugEvent('line_profile_fetch', {
+            lineUserId: String(lineUserId),
+            tokenExists: true,
+            success: true,
+            statusCode: resp.status,
+            displayName: profile.displayName || '',
+            pictureUrl: profile.pictureUrl || ''
+        });
         return {
             lineUserId: String(lineUserId),
             displayName: profile.displayName || 'LINE 使用者',
@@ -4654,7 +4716,16 @@ async function getLineProfile(lineUserId, channelAccessToken) {
             updatedAt: new Date().toISOString()
         };
     } catch (error) {
-        console.warn('[LINE profile] getLineProfile failed:', error?.response?.status || error.message);
+        const statusCode = error?.response?.status || null;
+        const reason = error?.response?.data?.message || error?.message || 'unknown_error';
+        console.warn('[LINE profile] getLineProfile failed:', statusCode || reason);
+        recordDebugEvent('line_profile_fetch', {
+            lineUserId: String(lineUserId),
+            tokenExists: true,
+            success: false,
+            statusCode,
+            reason
+        });
         return null;
     }
 }
@@ -4733,7 +4804,7 @@ async function backfillConversationProfileIfNeeded(conv) {
 async function maybeRefreshConversationProfile(conv) {
     if (!conv || !conv.customerLineId) return false;
     const needsName = !conv.customerName || conv.customerName === 'LINE 使用者';
-    const needsPicture = !conv.customerPicture;
+    const needsPicture = !normalizePictureUrl(conv.customerPicture || conv.pictureUrl || '');
     if (!needsName && !needsPicture) return false;
 
     try {
@@ -5627,6 +5698,57 @@ function appendOutboundConversationMessage(conversation, payload) {
     return msg;
 }
 
+async function sendLineTextAndLog({
+    conversation,
+    text,
+    sender,
+    lineAccessToken,
+    lineSecret,
+    toLineUserId,
+    isAutoReply = false,
+    isManualReply = false,
+    deliverToCustomer = true
+}) {
+    const outgoing = appendOutboundConversationMessage(conversation, {
+        text,
+        sender,
+        type: 'text',
+        isAutoReply,
+        isManualReply
+    });
+    outgoing.deliveryStatus = 'pending';
+    saveDatabase();
+
+    if (!deliverToCustomer) {
+        outgoing.deliveryStatus = 'internal_only';
+        outgoing.deliveryError = 'hidden_from_customer';
+        conversation.updatedAt = new Date().toISOString();
+        saveDatabase();
+        return outgoing;
+    }
+
+    if (!lineAccessToken || !toLineUserId) {
+        outgoing.deliveryStatus = 'failed';
+        outgoing.deliveryError = !lineAccessToken ? 'missing_credentials' : 'missing_target_user';
+        conversation.updatedAt = new Date().toISOString();
+        saveDatabase();
+        return outgoing;
+    }
+
+    try {
+        const client = new Client({ channelAccessToken: lineAccessToken, channelSecret: lineSecret || '' });
+        await client.pushMessage(toLineUserId, { type: 'text', text });
+        outgoing.deliveryStatus = 'sent';
+    } catch (error) {
+        outgoing.deliveryStatus = 'failed';
+        outgoing.deliveryError = error?.message || 'push_failed';
+    }
+
+    conversation.updatedAt = new Date().toISOString();
+    saveDatabase();
+    return outgoing;
+}
+
 function normalizeLineMessage(lineMessage) {
     const type = String(lineMessage?.type || '').toLowerCase();
     if (type === 'text') {
@@ -5749,9 +5871,20 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         let storedLineProfile = null;
         if (event.source?.type === 'user' && sourceUserId) {
             const profileFromApi = await getLineProfile(sourceUserId, lineAccessToken);
+            const latestProfileFetch = [...debugEvents].reverse().find((e) => e.tag === 'line_profile_fetch' && String(e?.data?.lineUserId || '') === String(sourceUserId));
             console.log('[LINE inbound profile]', {
                 sourceUserId,
+                lineAccessTokenExists: !!lineAccessToken,
                 getLineProfileSuccess: !!profileFromApi,
+                profileApiStatusCode: latestProfileFetch?.data?.statusCode ?? null,
+                displayName: profileFromApi?.displayName || '',
+                pictureUrl: profileFromApi?.pictureUrl || ''
+            });
+            recordDebugEvent('line_inbound_profile', {
+                sourceUserId,
+                lineAccessTokenExists: !!lineAccessToken,
+                getLineProfileSuccess: !!profileFromApi,
+                profileApiStatusCode: latestProfileFetch?.data?.statusCode ?? null,
                 displayName: profileFromApi?.displayName || '',
                 pictureUrl: profileFromApi?.pictureUrl || ''
             });
@@ -5768,6 +5901,7 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
                 });
             }
             console.log('[LINE inbound profile upsert result]', getLineProfileFromStore(sourceUserId));
+            recordDebugEvent('line_profile_upsert_result', getLineProfileFromStore(sourceUserId) || null);
         }
         
         // 寫入使用者專屬對話記錄（依 userId 隔離）
@@ -5929,43 +6063,28 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
         
         // 只有在有回覆內容時才回推
         if (replyText) {
-            const aiMessage = appendOutboundConversationMessage(conv, {
+            const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
+            console.log('[AI] preparing assistant append');
+            const aiMessage = await sendLineTextAndLog({
+                conversation: conv,
                 text: replyText,
                 sender: 'ai',
-                type: 'text',
-                isAutoReply: true
+                lineAccessToken,
+                lineSecret,
+                toLineUserId: sourceUserId,
+                isAutoReply: true,
+                isManualReply: false,
+                deliverToCustomer
             });
-            aiMessage.deliveryStatus = 'pending';
-            console.log('[AI] preparing assistant append');
-            saveDatabase();
             console.log('[AI] assistant message appended:', aiMessage);
-            console.log('[AI] saveDatabase completed');
             console.log('[AI] wrote to chat_history/messages:', Array.isArray(conv.messages));
             console.log('[AI] conversation last message:', conv.messages[conv.messages.length - 1] || null);
-
-            const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
-            if (deliverToCustomer) {
-                try {
-                    if (lineAccessToken) {
-                        const client = new Client({ channelAccessToken: lineAccessToken, channelSecret: lineSecret || '' });
-                        await client.pushMessage(sourceUserId, { type: 'text', text: replyText });
-                        aiMessage.deliveryStatus = 'sent';
-                    } else {
-                        aiMessage.deliveryStatus = 'failed';
-                        aiMessage.deliveryError = 'missing_credentials';
-                    }
-                } catch (pushErr) {
-                    aiMessage.deliveryStatus = 'failed';
-                    aiMessage.deliveryError = pushErr.message || 'push_failed';
-                }
-            } else {
-                aiMessage.deliveryStatus = 'internal_only';
-                aiMessage.deliveryError = 'hidden_from_customer';
-            }
-
-            conv.updatedAt = new Date().toISOString();
-            saveDatabase();
-            console.log('[AI] saveDatabase completed');
+            recordDebugEvent('ai_reply_delivery', {
+                replyText,
+                wroteToChatHistory: Array.isArray(conv.messages),
+                messageObject: aiMessage,
+                conversationLastMessage: conv.messages[conv.messages.length - 1] || null
+            });
             console.log('✅ 對話已儲存，總訊息數:', conv.messages.length);
         } else {
             console.log('📝 無回覆內容，不進行回推');
@@ -5999,41 +6118,30 @@ app.post('/api/line/manual-reply', authenticateJWT, async (req, res) => {
         
         const nowIso = new Date().toISOString();
 
-        // 將人工回覆加入對話記錄
-        const manualMessage = appendOutboundConversationMessage(conv, {
-            text: message,
-            sender: 'human',
-            type: 'text',
-            isManualReply: true
-        });
         // 人工回覆即視為接手對話
         conv.autoReplyEnabled = false;
         conv.manualOverride = true;
         if (!conv.manualModeSince) conv.manualModeSince = nowIso;
         conv.lastManualReplyAt = nowIso;
+        const creds = (conv.platform === 'line') ? getLineCredentials(conv.userId, conv.channelId) : null;
+        const manualMessage = await sendLineTextAndLog({
+            conversation: conv,
+            text: message,
+            sender: 'human',
+            lineAccessToken: creds?.channelAccessToken || '',
+            lineSecret: creds?.channelSecret || '',
+            toLineUserId: conv.customerLineId || '',
+            isAutoReply: false,
+            isManualReply: true,
+            deliverToCustomer: true
+        });
         conv.updatedAt = nowIso;
         saveDatabase();
         console.log('[Manual] outbound message appended:', manualMessage);
-        
-        // 如果是 LINE 對話，推送到 LINE
-        if (conv.platform === 'line' && conv.customerLineId) {
-            try {
-                const creds = getLineCredentials(conv.userId, conv.channelId);
-                if (creds && creds.channelAccessToken) {
-                    const client = new Client({ 
-                        channelAccessToken: creds.channelAccessToken, 
-                        channelSecret: creds.channelSecret 
-                    });
-                    await client.pushMessage(conv.customerLineId, { 
-                        type: 'text', 
-                        text: message 
-                    });
-                    console.log('✅ 人工回覆已推送到 LINE');
-                }
-            } catch (pushErr) {
-                console.error('❌ 推送人工回覆失敗:', pushErr.message);
-            }
-        }
+        recordDebugEvent('manual_reply_delivery', {
+            messageObject: manualMessage,
+            conversationLastMessage: conv.messages[conv.messages.length - 1] || null
+        });
         
         res.json({
             success: true,
@@ -6404,9 +6512,20 @@ async function handleLineBotMessage(event, bot) {
         let storedLineProfile = null;
         if (event.source?.type === 'user' && sourceUserId) {
             const profileFromApi = await getLineProfile(sourceUserId, botToken);
+            const latestProfileFetch = [...debugEvents].reverse().find((e) => e.tag === 'line_profile_fetch' && String(e?.data?.lineUserId || '') === String(sourceUserId));
             console.log('[LINE inbound profile]', {
                 sourceUserId,
+                lineAccessTokenExists: !!botToken,
                 getLineProfileSuccess: !!profileFromApi,
+                profileApiStatusCode: latestProfileFetch?.data?.statusCode ?? null,
+                displayName: profileFromApi?.displayName || '',
+                pictureUrl: profileFromApi?.pictureUrl || ''
+            });
+            recordDebugEvent('line_inbound_profile', {
+                sourceUserId,
+                lineAccessTokenExists: !!botToken,
+                getLineProfileSuccess: !!profileFromApi,
+                profileApiStatusCode: latestProfileFetch?.data?.statusCode ?? null,
                 displayName: profileFromApi?.displayName || '',
                 pictureUrl: profileFromApi?.pictureUrl || ''
             });
@@ -6423,6 +6542,7 @@ async function handleLineBotMessage(event, bot) {
                 });
             }
             console.log('[LINE inbound profile upsert result]', getLineProfileFromStore(sourceUserId));
+            recordDebugEvent('line_profile_upsert_result', getLineProfileFromStore(sourceUserId) || null);
         }
         
         // 寫入對話記錄
@@ -6535,43 +6655,28 @@ async function handleLineBotMessage(event, bot) {
                 console.log('✅ AI 回覆生成成功，長度:', reply.length);
                 console.log('[AI] generated reply:', reply);
                 
-                const aiMessage = appendOutboundConversationMessage(conv, {
+                const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
+                const token = decryptSensitive(bot.channel_access_token) || bot.channel_access_token_plain || '';
+                const secret = decryptSensitive(bot.channel_secret) || bot.channel_secret_plain || '';
+                console.log('[AI] preparing assistant append');
+                const aiMessage = await sendLineTextAndLog({
+                    conversation: conv,
                     text: reply,
                     sender: 'ai',
-                    type: 'text',
-                    isAutoReply: true
+                    lineAccessToken: token,
+                    lineSecret: secret,
+                    toLineUserId: sourceUserId,
+                    isAutoReply: true,
+                    isManualReply: false,
+                    deliverToCustomer
                 });
-                aiMessage.deliveryStatus = 'pending';
-                console.log('[AI] preparing assistant append');
-                saveDatabase();
                 console.log('[AI] assistant message appended:', aiMessage);
-                console.log('[AI] saveDatabase completed');
-
-                const deliverToCustomer = conv.autoReplyDeliverToCustomer !== false;
-                if (deliverToCustomer) {
-                    try {
-                        const token = decryptSensitive(bot.channel_access_token) || bot.channel_access_token_plain || '';
-                        const secret = decryptSensitive(bot.channel_secret) || bot.channel_secret_plain || '';
-                        if (token) {
-                            const client = new Client({ channelAccessToken: token, channelSecret: secret || '' });
-                            await client.pushMessage(sourceUserId, { type: 'text', text: reply });
-                            aiMessage.deliveryStatus = 'sent';
-                        } else {
-                            aiMessage.deliveryStatus = 'failed';
-                            aiMessage.deliveryError = 'missing_credentials';
-                        }
-                    } catch (pushErr) {
-                        aiMessage.deliveryStatus = 'failed';
-                        aiMessage.deliveryError = pushErr.message || 'push_failed';
-                    }
-                } else {
-                    aiMessage.deliveryStatus = 'internal_only';
-                    aiMessage.deliveryError = 'hidden_from_customer';
-                }
-
-                conv.updatedAt = new Date().toISOString();
-                saveDatabase();
-                console.log('[AI] saveDatabase completed');
+                recordDebugEvent('ai_reply_delivery', {
+                    replyText: reply,
+                    wroteToChatHistory: Array.isArray(conv.messages),
+                    messageObject: aiMessage,
+                    conversationLastMessage: conv.messages[conv.messages.length - 1] || null
+                });
             } catch (e) {
                 console.warn('❌ 生成 AI 回覆失敗:', e.message);
             }
