@@ -2806,6 +2806,37 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
     }
 });
 
+// DB inspect endpoint — 顯示 line_profiles 與對話頭貼狀態（JWT protected, admin only）
+app.get('/api/admin/db-inspect', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        loadDatabase();
+        const profiles = (database.line_profiles || []).map((p) => ({
+            lineUserId: p.lineUserId,
+            displayName: p.displayName || null,
+            hasPictureUrl: !!normalizePictureUrl(p.pictureUrl || ''),
+            pictureUrl: p.pictureUrl || null,
+            updatedAt: p.updatedAt || null
+        }));
+        const convSummary = (database.chat_history || []).filter((c) => {
+            const ch = String(c.channel || c.platform || '').toLowerCase();
+            return ch === 'line' || ch === 'line_bot';
+        }).map((c) => ({
+            id: c.id,
+            customerLineId: c.customerLineId || null,
+            hasCustomerPicture: !!normalizePictureUrl(c.customerPicture || c.pictureUrl || ''),
+            messageCount: Array.isArray(c.messages) ? c.messages.length : 0
+        }));
+        return res.json({
+            success: true,
+            lineProfiles: profiles,
+            lineConversationCount: convSummary.length,
+            lineConversations: convSummary
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // 清除無效 LINE 對話（假 userId / debug / test 建立的）
 // POST /api/admin/purge-invalid-conversations  (需 JWT + admin 角色)
 app.post('/api/admin/purge-invalid-conversations', authenticateJWT, checkRole(['admin']), (req, res) => {
@@ -4841,12 +4872,21 @@ function normalizePictureUrl(value) {
 async function backfillConversationProfileIfNeeded(conv) {
     if (!conv || !conv.customerLineId) return false;
     const hasPicture = !!normalizePictureUrl(conv.customerPicture || conv.pictureUrl || '');
-    if (hasPicture) return false;
+    // 若已有圖片，檢查是否超過 7 天沒更新（LINE CDN URL 可能過期）
+    if (hasPicture) {
+        const refreshedAt = conv.profileRefreshedAt ? Date.parse(conv.profileRefreshedAt) : 0;
+        const isStale = !refreshedAt || (Date.now() - refreshedAt > 7 * 24 * 60 * 60 * 1000);
+        if (!isStale) return false; // 未過期，不重抓
+    }
+    // 先嘗試從 line_profiles store 取（只有 profile store 也是新鮮的才用）
     const profileFromStore = getLineProfileFromStore(conv.customerLineId);
-    if (normalizePictureUrl(profileFromStore?.pictureUrl)) {
+    const storeUpdatedAt = profileFromStore?.updatedAt ? Date.parse(profileFromStore.updatedAt) : 0;
+    const storeIsStale = !storeUpdatedAt || (Date.now() - storeUpdatedAt > 7 * 24 * 60 * 60 * 1000);
+    if (normalizePictureUrl(profileFromStore?.pictureUrl) && !storeIsStale) {
         conv.customerPicture = profileFromStore.pictureUrl;
         conv.pictureUrl = profileFromStore.pictureUrl;
-        if (!conv.displayName) conv.displayName = profileFromStore.displayName || conv.customerName || 'LINE 使用者';
+        conv.displayName = profileFromStore.displayName || conv.displayName || conv.customerName || 'LINE 使用者';
+        conv.profileRefreshedAt = new Date().toISOString();
         conv.updatedAt = new Date().toISOString();
         return true;
     }
@@ -4859,13 +4899,15 @@ async function backfillConversationProfileIfNeeded(conv) {
             const bot = (database.line_bots || []).find((b) => b.id === conv.bot_id);
             token = decryptSensitive(bot?.channel_access_token) || bot?.channel_access_token_plain || '';
         }
+        if (!token) return false;
         const profile = await getLineProfile(conv.customerLineId, token);
         if (!profile) return false;
         const upserted = upsertLineProfile(profile);
         conv.customerName = upserted?.displayName || conv.customerName || 'LINE 使用者';
         conv.displayName = upserted?.displayName || conv.displayName || conv.customerName;
-        conv.customerPicture = upserted?.pictureUrl || conv.customerPicture || null;
-        conv.pictureUrl = upserted?.pictureUrl || conv.pictureUrl || conv.customerPicture || null;
+        conv.customerPicture = upserted?.pictureUrl || null;
+        conv.pictureUrl = upserted?.pictureUrl || null;
+        conv.profileRefreshedAt = new Date().toISOString();
         conv.updatedAt = new Date().toISOString();
         return true;
     } catch (error) {
@@ -4878,7 +4920,10 @@ async function maybeRefreshConversationProfile(conv) {
     if (!conv || !conv.customerLineId) return false;
     const needsName = !conv.customerName || conv.customerName === 'LINE 使用者';
     const needsPicture = !normalizePictureUrl(conv.customerPicture || conv.pictureUrl || '');
-    if (!needsName && !needsPicture) return false;
+    // 也刷新超過 7 天沒更新的 profile（LINE CDN URL 可能過期）
+    const refreshedAt = conv.profileRefreshedAt ? Date.parse(conv.profileRefreshedAt) : 0;
+    const isStale = !refreshedAt || (Date.now() - refreshedAt > 7 * 24 * 60 * 60 * 1000);
+    if (!needsName && !needsPicture && !isStale) return false;
 
     try {
         let token = '';
