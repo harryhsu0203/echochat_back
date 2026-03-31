@@ -603,6 +603,77 @@ if (!fs.existsSync(uploadsDir)) {
 }
 app.use('/uploads', express.static(uploadsDir));
 
+// ──────────────────────────────────────────────
+// Avatar proxy: GET /api/avatar/:lineUserId
+// 繞過 CSP / LINE CDN 限制，從 server 端抓圖並回傳
+// 不需 JWT，因為 LINE 頭貼本身是公開資料
+// ──────────────────────────────────────────────
+app.get('/api/avatar/:lineUserId', async (req, res) => {
+    try {
+        const { lineUserId } = req.params;
+        // 基本 userId 格式驗證（U + 32 hex）—— 防止任意 URL 探測
+        if (!lineUserId || !/^U[0-9a-f]{32}$/i.test(lineUserId)) {
+            return res.status(400).json({ error: 'invalid_user_id' });
+        }
+
+        loadDatabase();
+        // 1. 先從 line_profiles store 找
+        let pictureUrl = '';
+        const profile = (database.line_profiles || []).find(p => String(p.lineUserId) === lineUserId);
+        if (profile?.pictureUrl && String(profile.pictureUrl).startsWith('http')) {
+            pictureUrl = profile.pictureUrl;
+        }
+        // 2. 若 store 沒有，從 chat_history 找
+        if (!pictureUrl) {
+            const conv = (database.chat_history || []).find(c => c.customerLineId === lineUserId);
+            const candidate = conv?.customerPicture || conv?.pictureUrl || '';
+            if (candidate && String(candidate).startsWith('http')) {
+                pictureUrl = candidate;
+            }
+        }
+
+        if (!pictureUrl) {
+            return res.status(404).json({ error: 'no_avatar' });
+        }
+
+        // 3. Server-side 抓圖並 proxy 回前端
+        const imgResponse = await axios.get(pictureUrl, {
+            responseType: 'arraybuffer',
+            timeout: 8000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (compatible; EchoChat/1.0)',
+                'Accept': 'image/jpeg,image/png,image/*'
+            }
+        });
+
+        const contentType = imgResponse.headers['content-type'] || 'image/jpeg';
+        res.set('Content-Type', contentType);
+        res.set('Cache-Control', 'public, max-age=3600'); // 快取 1 小時
+        res.set('Access-Control-Allow-Origin', '*');
+        return res.send(Buffer.from(imgResponse.data));
+    } catch (err) {
+        // proxy 失敗：改用 redirect（讓瀏覽器自行嘗試）
+        const lineUserId = req.params.lineUserId;
+        loadDatabase();
+        const conv = (database.chat_history || []).find(c => c.customerLineId === lineUserId);
+        const directUrl = conv?.customerPicture || conv?.pictureUrl || '';
+        if (directUrl && directUrl.startsWith('http')) {
+            return res.redirect(302, directUrl);
+        }
+        return res.status(502).json({ error: 'proxy_failed', message: err.message });
+    }
+});
+
+// 版本確認 endpoint（讓前端可以在 console 或 Network 驗證後端版本）
+app.get('/api/version', (req, res) => {
+    return res.json({
+        api: 'echochat-api',
+        build: '2026-03-31-proxy-v1',
+        avatarProxy: '/api/avatar/:lineUserId',
+        timestamp: new Date().toISOString()
+    });
+});
+
 // ========= 敏感資訊加解密（AES-256-GCM） =========
 function getEncryptionKey() {
     const secret = process.env.LINE_SECRET_KEY;
