@@ -2664,8 +2664,12 @@ app.get('/api/conversations', authenticateJWT, async (req, res) => {
                 const id = String(c.id || '');
                 const isInternal = platform === 'dashboard' || platform === 'test' || id.startsWith('conv_');
                 if (isInternal) return false;
+                // 只保留有合法 LINE userId 的 LINE 對話；沒有 customerLineId 或格式非法的一律排除
+                const effectiveChannel = String(c.channel || c.platform || '').toLowerCase();
+                if ((effectiveChannel === 'line' || platform === 'line' || platform === 'line_bot') && !isValidLineUserId(c.customerLineId)) {
+                    return false;
+                }
                 if (!requestedChannel) return true;
-                const effectiveChannel = String(c.channel || c.platform || 'line').toLowerCase();
                 return effectiveChannel === requestedChannel;
             });
 
@@ -2799,6 +2803,44 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
         return res.json({ success: true, conversation: normalizedConversation });
     } catch (error) {
         return res.status(500).json({ success: false, error: '無法取得對話詳情' });
+    }
+});
+
+// 清除無效 LINE 對話（假 userId / debug / test 建立的）
+// POST /api/admin/purge-invalid-conversations  (需 JWT + admin 角色)
+app.post('/api/admin/purge-invalid-conversations', authenticateJWT, checkRole(['admin']), (req, res) => {
+    try {
+        loadDatabase();
+        const before = (database.chat_history || []).length;
+
+        const isLineConv = (c) => {
+            const ch = String(c.channel || c.platform || '').toLowerCase();
+            return ch === 'line' || ch === 'line_bot';
+        };
+
+        // 刪除 LINE 對話中 customerLineId 格式非法的（debug/test/空值）
+        const removed = [];
+        database.chat_history = (database.chat_history || []).filter((c) => {
+            if (isLineConv(c) && !isValidLineUserId(c.customerLineId)) {
+                removed.push({ id: c.id, customerLineId: c.customerLineId || null, customerName: c.customerName || null });
+                return false;
+            }
+            return true;
+        });
+
+        const after = database.chat_history.length;
+        if (removed.length > 0) saveDatabase();
+
+        return res.json({
+            success: true,
+            removedCount: removed.length,
+            before,
+            after,
+            removed
+        });
+    } catch (error) {
+        console.error('清除無效對話失敗:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 });
 
@@ -4657,6 +4699,16 @@ let lineAPISettings = {}; // 仍保留快取，但以 database.line_api_settings
 const lineDestinationCache = new Map();
 const debugEvents = [];
 
+/**
+ * 驗證 LINE userId 格式是否合法。
+ * 真實 LINE userId 格式：U + 32 hex 字元（不區分大小寫）。
+ * 拒絕 debug/test/假 userId，避免它們建立假對話。
+ */
+function isValidLineUserId(userId) {
+    if (!userId || typeof userId !== 'string') return false;
+    return /^U[0-9a-f]{32}$/i.test(userId.trim());
+}
+
 function recordDebugEvent(tag, data) {
     try {
         debugEvents.push({
@@ -5827,7 +5879,14 @@ function normalizeLineMessage(lineMessage) {
 async function handleLineMessage(event, userId, channelId, lineSetting) {
     try {
         const message = event.message;
-        const sourceUserId = event.source.userId;
+        const sourceUserId = event.source?.userId || '';
+
+        // 只接受真實 LINE userId 格式（U + 32 hex）；拒絕 debug/test 偽造 userId
+        if (!isValidLineUserId(sourceUserId)) {
+            console.warn('[LINE webhook] 拒絕無效 sourceUserId，不建立 conversation:', sourceUserId);
+            return;
+        }
+
         const normalized = normalizeLineMessage(message);
         const messageContent = normalized.content || '';
         const messageType = normalized.type || 'unknown';
@@ -6481,7 +6540,14 @@ app.post('/api/webhook/line-bot/:botId', async (req, res) => {
 async function handleLineBotMessage(event, bot) {
     try {
         const message = event.message;
-        const sourceUserId = event.source.userId;
+        const sourceUserId = event.source?.userId || '';
+
+        // 只接受真實 LINE userId 格式
+        if (!isValidLineUserId(sourceUserId)) {
+            console.warn('[LINE Bot webhook] 拒絕無效 sourceUserId，不建立 conversation:', sourceUserId);
+            return;
+        }
+
         const normalized = normalizeLineMessage(message);
         const messageContent = normalized.content || '';
         const messageType = normalized.type || 'unknown';
