@@ -282,37 +282,62 @@ function buildResponsesInput(messages) {
     };
 }
 
+/**
+ * 清理 message 陣列，確保只傳合法格式給 OpenAI：
+ * - role 只能是 system / user / assistant
+ * - content 必須是非空字串
+ */
+function sanitizeMessagesForOpenAI(rawMessages) {
+    const validRoles = new Set(['system', 'user', 'assistant']);
+    return (rawMessages || [])
+        .map(msg => {
+            const role = validRoles.has(msg?.role) ? msg.role : null;
+            // 有些訊息用 text 欄位（appendOutboundConversationMessage），有些用 content
+            const content = String(msg?.content || msg?.text || '').trim();
+            return role && content ? { role, content } : null;
+        })
+        .filter(Boolean);
+}
+
 async function requestOpenAIReply({ model, messages, maxTokens, temperature, topP }) {
     const headers = {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
     };
+    const TIMEOUT_MS = 30000; // 30 秒 timeout，避免無限等待
+
+    // 清理訊息（防止空 content 或無效 role 導致 OpenAI 400）
+    const cleanMessages = sanitizeMessagesForOpenAI(messages);
+    if (!cleanMessages.length) {
+        throw new Error('AI_BAD_INPUT: 清理後沒有有效訊息可傳送');
+    }
+
     if (isGpt5Model(model)) {
-        const { instructions, input } = buildResponsesInput(messages);
+        const { instructions, input } = buildResponsesInput(cleanMessages);
         const payload = {
             model,
-            input: input.length ? input : [{ role: 'user', content: [{ type: 'input_text', text: '' }] }],
+            input: input.length ? input : [{ role: 'user', content: [{ type: 'input_text', text: '您好' }] }],
             max_output_tokens: maxTokens,
             temperature
         };
         if (instructions) payload.instructions = instructions;
         if (typeof topP === 'number') payload.top_p = topP;
-        const resp = await axios.post('https://api.openai.com/v1/responses', payload, { headers });
+        const resp = await axios.post('https://api.openai.com/v1/responses', payload, { headers, timeout: TIMEOUT_MS });
         const text = extractOpenAIText(resp.data);
-        if (!text) throw new Error('OpenAI 回應格式解析失敗');
+        if (!text) throw new Error('AI_BAD_RESPONSE: OpenAI 回應格式解析失敗 (responses API)');
         return text;
     }
 
     const payload = {
         model,
-        messages,
+        messages: cleanMessages,
         max_tokens: maxTokens,
         temperature
     };
     if (typeof topP === 'number') payload.top_p = topP;
-    const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, { headers });
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', payload, { headers, timeout: TIMEOUT_MS });
     const text = extractOpenAIText(resp.data);
-    if (!text) throw new Error('OpenAI 回應格式解析失敗');
+    if (!text) throw new Error('AI_BAD_RESPONSE: OpenAI 回應格式解析失敗 (chat API)');
     return text;
 }
 
@@ -968,13 +993,19 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
         { role: 'system', content: systemPrompt + (knowledgeContext ? `\n\n以下為商家提供的知識庫內容，優先據此回答；若知識庫無相關資訊再自行作答，並標註「一般建議」。\n${knowledgeContext}` : '') }
     ];
     
-    // 添加對話歷史（限制最近 10 輪對話以避免 token 過多）
-    const recentMessages = messageHistory.slice(-20); // 最近 20 條訊息
-    for (const msg of recentMessages) {
-        if (msg.role === 'user' || msg.role === 'assistant') {
-            messages.push({ role: msg.role, content: msg.content });
-        }
+    // 添加對話歷史（只取最近 20 條，並過濾空 content 和無效 role，避免 token 過多或 OpenAI 400）
+    let recentHistory = sanitizeMessagesForOpenAI(messageHistory.slice(-20));
+
+    // 保護：若 history 文字總量超過 6000 字，只取最後幾條避免 context overflow
+    let historyCharCount = recentHistory.reduce((acc, m) => acc + (m.content?.length || 0), 0);
+    while (historyCharCount > 6000 && recentHistory.length > 2) {
+        recentHistory = recentHistory.slice(2); // 移除最舊兩條
+        historyCharCount = recentHistory.reduce((acc, m) => acc + (m.content?.length || 0), 0);
     }
+    messages.push(...recentHistory);
+
+    const historyTokenEstimate = Math.ceil(historyCharCount / 3);
+    console.log(`[AI generateHistory] userId=${userId} historyCount=${recentHistory.length} historyChars=${historyCharCount} historyTokenEstimate=${historyTokenEstimate} model=${aiConfig.llm}`);
 
     const plan = user?.plan || 'free';
     const planAllowance = getPlanAllowance(plan, user);
@@ -3530,12 +3561,14 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         // 構建系統提示詞
         const systemPrompt = `你是 ${aiConfig.assistant_name}，${aiConfig.description}。你的使用場景是：${aiConfig.use_case}。請根據用戶的問題提供專業、友善且有用的回應。`;
 
-        // 準備對話歷史
+        // 準備對話歷史（清理後只保留合法 role + 非空 content，避免 OpenAI 400）
         let conversationHistory = [];
         if (conversationId && database.chat_history) {
             const existingConversation = database.chat_history.find(conv => conv.id === conversationId);
             if (existingConversation && existingConversation.messages) {
-                conversationHistory = existingConversation.messages.slice(-10); // 保留最近10條訊息
+                const rawHistory = existingConversation.messages.slice(-20); // 取最近 20 條
+                conversationHistory = sanitizeMessagesForOpenAI(rawHistory);
+                console.log(`[AI chat] conversationId=${conversationId} rawHistory=${rawHistory.length} cleanHistory=${conversationHistory.length}`);
             }
         }
 
@@ -3700,69 +3733,67 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         });
 
     } catch (error) {
-        console.error('AI 聊天錯誤:', error);
-        console.error('錯誤詳情:', {
-            message: error.message,
-            response: error.response ? {
-                status: error.response.status,
-                data: error.response.data
-            } : null,
-            code: error.code
+        // 分類錯誤碼（供前端追蹤）
+        const httpStatus = error.response?.status;
+        const openaiErrorMsg = error.response?.data?.error?.message || '';
+        const errMsg = error.message || '';
+
+        // 完整 log（後端可追蹤）
+        console.error('[AI Chat Error]', {
+            conversationId: req.body?.conversationId,
+            userId: req.staff?.id,
+            model: req.body?.model || 'unknown',
+            httpStatus,
+            errorCode: error.code,
+            errorMessage: errMsg,
+            openaiError: openaiErrorMsg,
+            stack: error.stack?.split('\n').slice(0, 4).join(' | ')
         });
-        
-        // 檢查是否為 OpenAI API 錯誤
-        if (error.response) {
-            if (error.response.status === 401) {
-                return res.status(500).json({
-                    success: false,
-                    error: 'OpenAI API 金鑰無效或已過期',
-                    details: '請檢查 OPENAI_API_KEY 環境變數是否正確',
-                    solution: '請運行 node update-render-env-openai.js 更新 API Key'
-                });
-            } else if (error.response.status === 429) {
-                return res.status(500).json({
-                    success: false,
-                    error: 'OpenAI API 請求頻率過高',
-                    details: '已達到 API 使用限制',
-                    solution: '請稍後再試或升級 OpenAI 計劃'
-                });
-            } else if (error.response.status === 403) {
-                return res.status(500).json({
-                    success: false,
-                    error: 'OpenAI API 存取被拒絕',
-                    details: '可能是帳戶問題或 API Key 權限不足',
-                    solution: '請檢查 OpenAI 帳戶狀態'
-                });
-            } else if (error.response.status === 400) {
-                return res.status(500).json({
-                    success: false,
-                    error: 'OpenAI API 請求參數錯誤',
-                    details: error.response.data?.error?.message || '請求格式不正確',
-                    solution: '請檢查模型名稱和請求參數'
-                });
-            }
+
+        // 錯誤分類
+        let errorCode = 'AI_ERROR';
+        let userMessage = 'AI 暫時無法回應，請稍後再試';
+
+        if (httpStatus === 401) {
+            errorCode = 'AI_INVALID_KEY';
+            userMessage = 'AI 金鑰無效，請聯繫管理員';
+        } else if (httpStatus === 429) {
+            errorCode = 'AI_RATE_LIMIT';
+            userMessage = 'AI 請求頻率過高，請稍後再試';
+        } else if (httpStatus === 403) {
+            errorCode = 'AI_FORBIDDEN';
+            userMessage = 'AI 存取被拒，請聯繫管理員';
+        } else if (httpStatus === 400) {
+            errorCode = 'AI_BAD_REQUEST';
+            userMessage = 'AI 請求格式錯誤，請聯繫技術支援';
+        } else if (errMsg.startsWith('AI_CONTEXT_TOO_LARGE') || openaiErrorMsg.includes('maximum context')) {
+            errorCode = 'AI_CONTEXT_TOO_LARGE';
+            userMessage = '對話太長，請重新開始一段對話';
+        } else if (errMsg.startsWith('AI_BAD_RESPONSE')) {
+            errorCode = 'AI_BAD_RESPONSE';
+            userMessage = 'AI 回應格式異常，請稍後再試';
+        } else if (error.code === 'ECONNABORTED' || errMsg.includes('timeout')) {
+            errorCode = 'AI_TIMEOUT';
+            userMessage = 'AI 回應逾時，請稍後再試';
         } else if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
-            return res.status(500).json({
-                success: false,
-                error: '無法連接到 OpenAI 服務',
-                details: `網路錯誤: ${error.code}`,
-                solution: '請檢查網路連接或稍後再試'
-            });
-        } else if (error.message && error.message.includes('API key')) {
-            return res.status(500).json({
-                success: false,
-                error: 'OpenAI API Key 配置問題',
-                details: error.message,
-                solution: '請運行 node update-render-env-openai.js 設置 API Key'
-            });
+            errorCode = 'AI_NETWORK';
+            userMessage = '無法連線到 AI 服務，請稍後再試';
+        } else if (errMsg.includes('餘額不足')) {
+            errorCode = 'AI_INSUFFICIENT_BALANCE';
+            userMessage = '對話點數不足，請至儀表板加值';
+        } else if (errMsg.includes('對話次數')) {
+            errorCode = 'AI_QUOTA_EXCEEDED';
+            userMessage = '本月對話次數已達上限，請升級方案';
+        } else if (errMsg.includes('OPENAI_API_KEY')) {
+            errorCode = 'AI_NO_KEY';
+            userMessage = 'AI 服務尚未配置，請聯繫管理員';
         }
 
-        // 一般錯誤
         res.status(500).json({
             success: false,
-            error: 'AI 回應生成失敗',
-            details: error.message || '未知錯誤',
-            solution: '請檢查伺服器日誌或聯繫技術支援'
+            errorCode,
+            error: userMessage,
+            details: openaiErrorMsg || errMsg || '未知錯誤'
         });
     }
 });
