@@ -20,17 +20,27 @@ const cors = require('cors');
 require('dotenv').config();
 
 // ─── Email / SMTP 設定 ─────────────────────────────────────────
-// 環境變數說明：
-//   EMAIL_HOST      - SMTP 伺服器主機 (例如 mail.echochat.com.tw 或 smtp.gmail.com)
-//   EMAIL_PORT      - SMTP port (587 = STARTTLS, 465 = SSL, 25 = 不加密)
-//   EMAIL_SECURE    - true 表示 SSL/TLS (port 465 用), false 表示 STARTTLS (port 587 用)
-//   EMAIL_USER      - SMTP 帳號 (例如 noreply@echochat.com.tw)
-//   EMAIL_PASS      - SMTP 密碼
-//   EMAIL_FROM      - 寄件者顯示名稱與地址 (例如 "EchoChat <noreply@echochat.com.tw>")
+// ⚠️  寄件者固定為 EchoChat <contact@echochat.com.tw>
+//     SMTP 認證帳號（EMAIL_USER）可以不同，但 mail server 必須允許代送此地址
+//
+// Render 環境變數需要設定：
+//   EMAIL_HOST   - SMTP 主機，例如 mail.echochat.com.tw
+//   EMAIL_PORT   - 587 (STARTTLS) 或 465 (SSL)
+//   EMAIL_SECURE - false(587) 或 true(465)
+//   EMAIL_USER   - SMTP 認證帳號，例如 contact@echochat.com.tw
+//   EMAIL_PASS   - SMTP 密碼
+
+// ── 寄件者永遠固定（不可被環境變數覆蓋顯示名稱）
+const FIXED_FROM_ADDRESS = 'EchoChat <contact@echochat.com.tw>';
+
+// SMTP 認證帳號（可以和 From 地址一樣，也可以是代理帳號）
 const EMAIL_ACCOUNT = process.env.EMAIL_USER || process.env.EMAIL_ACCOUNT || '';
 const EMAIL_PASSWORD = process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || '';
-const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM || `EchoChat <${EMAIL_ACCOUNT || 'noreply@echochat.com.tw'}>`;
-// 若沒有明確設定 EMAIL_HOST，根據 EMAIL_USER domain 自動推斷
+
+// EMAIL_FROM 環境變數只在「明確需要覆蓋」時才生效；否則固定使用 FIXED_FROM_ADDRESS
+const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM || FIXED_FROM_ADDRESS;
+
+// 自動推斷 SMTP 主機
 const _emailDomain = EMAIL_ACCOUNT.split('@')[1] || '';
 const EMAIL_HOST = process.env.EMAIL_HOST
     || (_emailDomain === 'gmail.com' ? 'smtp.gmail.com'
@@ -52,6 +62,9 @@ if (EMAIL_ACCOUNT && EMAIL_PASSWORD) {
 }
 const mailTransporter = nodemailer.createTransport(transporterOptions);
 
+// 啟動時 log 寄件設定，方便確認
+console.log(`📧 Email 設定: FROM="${EMAIL_FROM_ADDRESS}" HOST=${EMAIL_HOST} PORT=${EMAIL_PORT} USER=${EMAIL_ACCOUNT || '(未設定)'}`);
+
 // 測試 SMTP 連線（啟動後 30 秒非同步確認）
 if (EMAIL_ACCOUNT && EMAIL_PASSWORD) {
     setTimeout(async () => {
@@ -66,54 +79,151 @@ if (EMAIL_ACCOUNT && EMAIL_PASSWORD) {
     console.warn('⚠️ SMTP 未設定（EMAIL_USER / EMAIL_PASS），郵件功能停用');
 }
 
+// ── 共用郵件寄送 helper ──────────────────────────────────────
 function generateVerificationCode() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+/** 統一 HTML 信件樣板，From header 永遠是 EchoChat <contact@echochat.com.tw> */
 function buildBrandMailTemplate(title, body) {
-    return `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #667eea;">EchoChat ${title}</h2>
+    return `<!DOCTYPE html>
+<html lang="zh-TW">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f6f9;font-family:Arial,'PingFang TC','Microsoft JhengHei',sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f6f9;padding:40px 0;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 16px rgba(0,0,0,.08);max-width:600px;width:100%;">
+        <!-- Header -->
+        <tr>
+          <td style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:32px 40px;text-align:center;">
+            <h1 style="margin:0;color:#fff;font-size:24px;font-weight:700;letter-spacing:1px;">EchoChat</h1>
+            <p style="margin:6px 0 0;color:rgba(255,255,255,.85);font-size:13px;">${title}</p>
+          </td>
+        </tr>
+        <!-- Body -->
+        <tr>
+          <td style="padding:36px 40px;color:#2d3748;font-size:15px;line-height:1.8;">
             ${body}
-            <p style="color: #666; font-size: 12px; margin-top: 30px;">
-                此郵件由 EchoChat 系統自動發送，請勿回覆。
+          </td>
+        </tr>
+        <!-- Footer -->
+        <tr>
+          <td style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 40px;text-align:center;">
+            <p style="margin:0;color:#a0aec0;font-size:12px;">
+              此郵件由 <strong>EchoChat</strong> 系統自動發送，請勿直接回覆。<br>
+              寄件地址：<a href="mailto:contact@echochat.com.tw" style="color:#667eea;">contact@echochat.com.tw</a>
             </p>
-        </div>
-    `;
+          </td>
+        </tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`;
 }
 
+/** 統一寄信 wrapper，確保 From header 正確，並記錄 log */
+async function sendEmail({ to, subject, html, logTag = 'sendEmail' }) {
+    const mailOptions = {
+        from: EMAIL_FROM_ADDRESS,   // EchoChat <contact@echochat.com.tw>
+        to,
+        subject,
+        html
+    };
+    try {
+        const info = await mailTransporter.sendMail(mailOptions);
+        console.log(`[${logTag}] ✅ 寄送成功 → to=${to} subject="${subject}" messageId=${info.messageId}`);
+        return info;
+    } catch (err) {
+        console.error(`[${logTag}] ❌ 寄送失敗 → to=${to} subject="${subject}" err=${err.message}`);
+        throw err;
+    }
+}
+
+// ── 各類郵件函式（所有 From 皆來自 sendEmail，固定為 EMAIL_FROM_ADDRESS）
+
+/** 【驗證信】註冊時寄送的 6 位數驗證碼 */
 async function sendVerificationEmail(email, code) {
-    const mailOptions = {
-        from: EMAIL_FROM_ADDRESS,
+    return sendEmail({
         to: email,
-        subject: 'EchoChat - 電子郵件驗證碼',
+        subject: 'EchoChat 帳號驗證碼',
         html: buildBrandMailTemplate('電子郵件驗證', `
-            <p>您的驗證碼是：</p>
-            <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #667eea; border-radius: 8px; margin: 20px 0;">
-                ${code}
+            <p>您好，感謝您註冊 EchoChat！</p>
+            <p>請使用以下驗證碼完成帳號驗證：</p>
+            <div style="background:#f0f4ff;border:2px solid #667eea;border-radius:10px;padding:24px;text-align:center;margin:24px 0;">
+              <span style="font-size:36px;font-weight:800;color:#667eea;letter-spacing:8px;">${code}</span>
             </div>
-            <p>此驗證碼將在10分鐘後過期。</p>
-            <p>如果您沒有要求此驗證碼，請忽略此郵件。</p>
-        `)
-    };
-    return mailTransporter.sendMail(mailOptions);
+            <p style="color:#718096;font-size:13px;">⏱ 此驗證碼將在 <strong>10 分鐘</strong>後失效。</p>
+            <p style="color:#718096;font-size:13px;">若您並未申請此驗證碼，請忽略此郵件。</p>
+        `),
+        logTag: 'sendVerificationEmail'
+    });
 }
 
+/** 【忘記密碼信】密碼重設驗證碼 */
 async function sendPasswordResetEmail(email, code) {
-    const mailOptions = {
-        from: EMAIL_FROM_ADDRESS,
+    return sendEmail({
         to: email,
-        subject: 'EchoChat - 密碼重設驗證碼',
+        subject: 'EchoChat 密碼重設驗證碼',
         html: buildBrandMailTemplate('密碼重設', `
-            <p>您要求重設密碼，請使用以下驗證碼：</p>
-            <div style="background-color: #f8f9fa; padding: 20px; text-align: center; font-size: 24px; font-weight: bold; color: #667eea; border-radius: 8px; margin: 20px 0;">
-                ${code}
+            <p>您好，我們收到了您的密碼重設請求。</p>
+            <p>請使用以下驗證碼重設密碼：</p>
+            <div style="background:#fff5f5;border:2px solid #fc8181;border-radius:10px;padding:24px;text-align:center;margin:24px 0;">
+              <span style="font-size:36px;font-weight:800;color:#e53e3e;letter-spacing:8px;">${code}</span>
             </div>
-            <p>此驗證碼將在10分鐘後過期。</p>
-            <p>如果您沒有要求重設密碼，請忽略此郵件並確保您的帳號安全。</p>
-        `)
-    };
-    return mailTransporter.sendMail(mailOptions);
+            <p style="color:#718096;font-size:13px;">⏱ 此驗證碼將在 <strong>10 分鐘</strong>後失效。</p>
+            <p style="color:#718096;font-size:13px;">⚠️ 若您並未申請密碼重設，請立即聯繫我們，並確保帳號安全。</p>
+        `),
+        logTag: 'sendPasswordResetEmail'
+    });
+}
+
+/** 【Magic Link 登入信】一次性登入連結 */
+async function sendMagicLinkEmail(email, magicUrl) {
+    return sendEmail({
+        to: email,
+        subject: 'EchoChat 一鍵登入連結',
+        html: buildBrandMailTemplate('Magic Link 登入', `
+            <p>您好！</p>
+            <p>我們收到了您使用 Magic Link 登入 EchoChat 的請求。</p>
+            <div style="text-align:center;margin:32px 0;">
+              <a href="${magicUrl}" style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:16px;font-weight:700;letter-spacing:0.5px;">
+                🔑 點擊此處登入
+              </a>
+            </div>
+            <p style="color:#718096;font-size:13px;">⏱ 此連結將在 <strong>15 分鐘</strong>後失效，且只能使用一次。</p>
+            <p style="color:#718096;font-size:13px;">若您並未申請此連結，請忽略此郵件。</p>
+            <p style="color:#718096;font-size:12px;">若按鈕無法點擊，請複製以下連結到瀏覽器：<br><a href="${magicUrl}" style="color:#667eea;word-break:break-all;">${magicUrl}</a></p>
+        `),
+        logTag: 'sendMagicLinkEmail'
+    });
+}
+
+/** 【歡迎信】新帳號建立後寄送 */
+async function sendWelcomeEmail(email, name) {
+    return sendEmail({
+        to: email,
+        subject: '歡迎加入 EchoChat！',
+        html: buildBrandMailTemplate('歡迎加入 EchoChat 🎉', `
+            <p>您好，${name || '新用戶'}！</p>
+            <p>感謝您加入 <strong>EchoChat</strong>，您的帳號已成功建立。</p>
+            <div style="background:#f0f4ff;border-radius:10px;padding:20px 24px;margin:24px 0;">
+              <p style="margin:0 0 8px;font-weight:700;color:#667eea;">🚀 快速開始</p>
+              <ul style="margin:0;padding-left:20px;color:#4a5568;font-size:14px;line-height:2;">
+                <li>前往儀表板設定您的 LINE Bot</li>
+                <li>建立知識庫，讓 AI 更了解您的業務</li>
+                <li>開始接收並自動回覆客戶訊息</li>
+              </ul>
+            </div>
+            <div style="text-align:center;margin:28px 0;">
+              <a href="https://echochat-web.onrender.com/dashboard.html" style="display:inline-block;background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;text-decoration:none;padding:14px 40px;border-radius:8px;font-size:15px;font-weight:700;">
+                前往儀表板
+              </a>
+            </div>
+            <p style="color:#718096;font-size:13px;">如有任何問題，請聯繫我們：<a href="mailto:contact@echochat.com.tw" style="color:#667eea;">contact@echochat.com.tw</a></p>
+        `),
+        logTag: 'sendWelcomeEmail'
+    });
 }
 
 // 防重複處理的記憶體快取
@@ -1498,7 +1608,8 @@ const loadDatabase = () => {
                 password_change_requests: loadedData.password_change_requests || [],
                 line_api_settings: loadedData.line_api_settings || [],
                 line_bots: loadedData.line_bots || [],
-                oauth_accounts: loadedData.oauth_accounts || []
+                oauth_accounts: loadedData.oauth_accounts || [],
+                magic_links: loadedData.magic_links || []
             };
         }
     } catch (error) {
@@ -1856,10 +1967,76 @@ app.post('/api/register', async (req, res) => {
         database.email_verifications = (database.email_verifications || []).filter(v => v.email !== email);
         saveDatabase();
         const { password: _, ...safe } = newUser;
+
+        // 寄送歡迎信（非阻塞，失敗不影響註冊）
+        sendWelcomeEmail(email, name).catch(err =>
+            console.error('[register] 歡迎信寄送失敗:', err.message)
+        );
+
         res.json({ success: true, account: safe });
     } catch (e) {
         console.error('註冊失敗:', e);
         res.status(500).json({ success: false, error: '註冊失敗' });
+    }
+});
+
+// ─── Magic Link 登入 ──────────────────────────────────────────
+// POST /api/auth/magic-link/request → 寄送 magic link 信件
+app.post('/api/auth/magic-link/request', async (req, res) => {
+    try {
+        const { email } = req.body || {};
+        if (!email || typeof email !== 'string') {
+            return res.status(400).json({ success: false, error: '請提供電子郵件地址' });
+        }
+        loadDatabase();
+        const user = (database.staff_accounts || []).find(u => u.email === email.trim().toLowerCase());
+        if (!user) {
+            // 安全：不揭露帳號是否存在（固定回 200）
+            console.warn(`[magic-link] 找不到帳號 email=${email}`);
+            return res.json({ success: true, message: '若此信箱已有帳號，您將會收到登入連結' });
+        }
+
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+        if (!Array.isArray(database.magic_links)) database.magic_links = [];
+        database.magic_links = database.magic_links.filter(l => l.email !== email);
+        database.magic_links.push({ email, token, userId: user.id, expiresAt, used: false });
+        saveDatabase();
+
+        const frontendBase = process.env.FRONTEND_BASE_URL || 'https://echochat-web.onrender.com';
+        const magicUrl = `${frontendBase}/login.html?magic_token=${token}`;
+
+        await sendMagicLinkEmail(email, magicUrl);
+        return res.json({ success: true, message: '若此信箱已有帳號，您將會收到登入連結' });
+    } catch (e) {
+        console.error('[magic-link request] 失敗:', e.message);
+        return res.status(500).json({ success: false, error: '寄送失敗，請稍後再試' });
+    }
+});
+
+// GET /api/auth/magic-link/verify?token=... → 驗證 token，回傳 JWT
+app.get('/api/auth/magic-link/verify', async (req, res) => {
+    try {
+        const { token } = req.query;
+        if (!token) return res.status(400).json({ success: false, error: '缺少 token' });
+        loadDatabase();
+        const link = (database.magic_links || []).find(l => l.token === token && !l.used);
+        if (!link) return res.status(401).json({ success: false, error: '連結無效或已使用' });
+        if (new Date() > new Date(link.expiresAt)) {
+            database.magic_links = (database.magic_links || []).filter(l => l.token !== token);
+            saveDatabase();
+            return res.status(401).json({ success: false, error: '連結已過期' });
+        }
+        const user = (database.staff_accounts || []).find(u => u.id === link.userId);
+        if (!user) return res.status(401).json({ success: false, error: '帳號不存在' });
+        link.used = true;
+        saveDatabase();
+        const jwt_token = issueJwtForUser(user);
+        console.log(`[magic-link verify] ✅ userId=${user.id} email=${user.email}`);
+        return res.json({ success: true, token: jwt_token, user: { id: user.id, name: user.name, email: user.email, role: user.role, plan: user.plan } });
+    } catch (e) {
+        console.error('[magic-link verify] 失敗:', e.message);
+        return res.status(500).json({ success: false, error: '驗證失敗，請稍後再試' });
     }
 });
 
