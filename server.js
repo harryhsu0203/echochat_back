@@ -19,31 +19,52 @@ const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 
-const DEFAULT_SENDER_EMAIL = 'contact@echochat.com.tw';
+// ─── Email / SMTP 設定 ─────────────────────────────────────────
+// 環境變數說明：
+//   EMAIL_HOST      - SMTP 伺服器主機 (例如 mail.echochat.com.tw 或 smtp.gmail.com)
+//   EMAIL_PORT      - SMTP port (587 = STARTTLS, 465 = SSL, 25 = 不加密)
+//   EMAIL_SECURE    - true 表示 SSL/TLS (port 465 用), false 表示 STARTTLS (port 587 用)
+//   EMAIL_USER      - SMTP 帳號 (例如 noreply@echochat.com.tw)
+//   EMAIL_PASS      - SMTP 密碼
+//   EMAIL_FROM      - 寄件者顯示名稱與地址 (例如 "EchoChat <noreply@echochat.com.tw>")
 const EMAIL_ACCOUNT = process.env.EMAIL_USER || process.env.EMAIL_ACCOUNT || '';
 const EMAIL_PASSWORD = process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || '';
-const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM || DEFAULT_SENDER_EMAIL;
-const EMAIL_HOST = process.env.EMAIL_HOST || (EMAIL_ACCOUNT.includes('gmail.com') ? 'smtp.gmail.com' : 'smtp.gmail.com');
+const EMAIL_FROM_ADDRESS = process.env.EMAIL_FROM || `EchoChat <${EMAIL_ACCOUNT || 'noreply@echochat.com.tw'}>`;
+// 若沒有明確設定 EMAIL_HOST，根據 EMAIL_USER domain 自動推斷
+const _emailDomain = EMAIL_ACCOUNT.split('@')[1] || '';
+const EMAIL_HOST = process.env.EMAIL_HOST
+    || (_emailDomain === 'gmail.com' ? 'smtp.gmail.com'
+        : _emailDomain === 'outlook.com' || _emailDomain === 'hotmail.com' ? 'smtp.office365.com'
+        : _emailDomain ? `mail.${_emailDomain}` : 'smtp.gmail.com');
 const EMAIL_PORT = parseInt(process.env.EMAIL_PORT || '587', 10);
-const EMAIL_SECURE = process.env.EMAIL_SECURE ? process.env.EMAIL_SECURE === 'true' : EMAIL_PORT === 465;
+const EMAIL_SECURE = process.env.EMAIL_SECURE
+    ? process.env.EMAIL_SECURE === 'true'
+    : EMAIL_PORT === 465;
 
 const transporterOptions = {
     host: EMAIL_HOST,
     port: EMAIL_PORT,
     secure: EMAIL_SECURE,
-    tls: {
-        rejectUnauthorized: false
-    }
+    tls: { rejectUnauthorized: false }
 };
-
 if (EMAIL_ACCOUNT && EMAIL_PASSWORD) {
-    transporterOptions.auth = {
-        user: EMAIL_ACCOUNT,
-        pass: EMAIL_PASSWORD
-    };
+    transporterOptions.auth = { user: EMAIL_ACCOUNT, pass: EMAIL_PASSWORD };
 }
-
 const mailTransporter = nodemailer.createTransport(transporterOptions);
+
+// 測試 SMTP 連線（啟動後 30 秒非同步確認）
+if (EMAIL_ACCOUNT && EMAIL_PASSWORD) {
+    setTimeout(async () => {
+        try {
+            await mailTransporter.verify();
+            console.log(`✅ SMTP 連線正常: host=${EMAIL_HOST} port=${EMAIL_PORT} user=${EMAIL_ACCOUNT}`);
+        } catch (e) {
+            console.error(`❌ SMTP 連線失敗: host=${EMAIL_HOST} port=${EMAIL_PORT} err=${e.message}`);
+        }
+    }, 30000);
+} else {
+    console.warn('⚠️ SMTP 未設定（EMAIL_USER / EMAIL_PASS），郵件功能停用');
+}
 
 function generateVerificationCode() {
     return Math.floor(100000 + Math.random() * 900000).toString();
@@ -482,9 +503,108 @@ async function fetchI18nPricing(baseUrl) {
     }
 }
 
-// Google OAuth 配置
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+// ─── OAuth 全域設定 ─────────────────────────────────────────────
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
+
+const LINE_LOGIN_CHANNEL_ID = process.env.LINE_LOGIN_CHANNEL_ID || '';
+const LINE_LOGIN_CHANNEL_SECRET = process.env.LINE_LOGIN_CHANNEL_SECRET || '';
+
+// 後端 callback 的 base URL（Render web service URL）
+const OAUTH_CALLBACK_BASE = (process.env.OAUTH_CALLBACK_BASE_URL || 'https://echochat-api.onrender.com').replace(/\/$/, '');
+// 前端 URL（Render static / web 前台）
+const FRONTEND_BASE = (process.env.FRONTEND_BASE_URL || 'https://echochat-web.onrender.com').replace(/\/$/, '');
+
+// OAuth state cache（防 CSRF）：生產環境可改用 Redis
+const oauthStateCache = new Map(); // state → { provider, expiresAt }
+function generateOAuthState(provider) {
+    const state = crypto.randomBytes(24).toString('hex');
+    oauthStateCache.set(state, { provider, expiresAt: Date.now() + 10 * 60 * 1000 });
+    setTimeout(() => oauthStateCache.delete(state), 10 * 60 * 1000);
+    return state;
+}
+function consumeOAuthState(state) {
+    const entry = oauthStateCache.get(state);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) { oauthStateCache.delete(state); return null; }
+    oauthStateCache.delete(state);
+    return entry;
+}
+
+/**
+ * 找或建立帳號（OAuth 統一入口）
+ * 優先：by (provider, providerId) → by email → 新建
+ */
+async function findOrCreateOAuthAccount({ provider, providerId, email, name, avatarUrl }) {
+    loadDatabase();
+    if (!Array.isArray(database.oauth_accounts)) database.oauth_accounts = [];
+
+    // 1. 查 oauth_accounts
+    let link = database.oauth_accounts.find(
+        a => a.provider === provider && String(a.providerId) === String(providerId)
+    );
+    if (link) {
+        const user = (database.staff_accounts || []).find(u => u.id === link.userId);
+        if (user) {
+            console.log(`[OAuth] found by link: provider=${provider} providerId=${providerId} userId=${user.id}`);
+            return user;
+        }
+    }
+
+    // 2. 查 email
+    if (email) {
+        let user = (database.staff_accounts || []).find(u => u.email === email);
+        if (user) {
+            // 補建 link
+            database.oauth_accounts.push({ provider, providerId: String(providerId), userId: user.id, email, createdAt: new Date().toISOString() });
+            saveDatabase();
+            console.log(`[OAuth] linked to existing account by email: email=${email} userId=${user.id}`);
+            return user;
+        }
+    }
+
+    // 3. 新建帳號
+    const ids = (database.staff_accounts || []).map(u => u.id).filter(Number.isFinite);
+    const newId = ids.length ? Math.max(...ids) + 1 : 1;
+    const username = email || `${provider}_${providerId}`;
+    const newUser = {
+        id: newId,
+        username,
+        password: await bcrypt.hash(uuidv4(), 10),
+        name: name || username,
+        role: 'user',
+        email: email || '',
+        avatar: avatarUrl || '',
+        plan: 'free',
+        oauth_provider: provider,
+        created_at: new Date().toISOString()
+    };
+    database.staff_accounts.push(newUser);
+    database.oauth_accounts.push({ provider, providerId: String(providerId), userId: newId, email: email || '', createdAt: new Date().toISOString() });
+    saveDatabase();
+    console.log(`[OAuth] created new account: provider=${provider} email=${email} userId=${newId}`);
+    return newUser;
+}
+
+function issueJwtForUser(user) {
+    return jwt.sign(
+        { id: user.id, username: user.username, name: user.name, role: user.role, plan: user.plan || 'free' },
+        JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
+    );
+}
+
+function oauthSuccessRedirect(res, token, provider) {
+    const url = `${FRONTEND_BASE}/login.html?oauth=success&provider=${provider}&token=${encodeURIComponent(token)}`;
+    console.log(`[OAuth] success redirect: provider=${provider}`);
+    return res.redirect(url);
+}
+function oauthFailRedirect(res, provider, reason) {
+    const url = `${FRONTEND_BASE}/login.html?oauth=fail&provider=${provider}&reason=${encodeURIComponent(reason)}`;
+    console.error(`[OAuth] fail redirect: provider=${provider} reason=${reason}`);
+    return res.redirect(url);
+}
 
 // CORS 設定 - 允許前端網站和手機 App 訪問
 app.use(cors({
@@ -512,40 +632,156 @@ app.use(cors({
     maxAge: 600
 }));
 
-// Google 登入交換端點：前端傳 id_token，後端驗證並發 JWT
+// ─── Google OAuth ─────────────────────────────────────────────
+// 1. 前端傳 id_token（Google Identity Services One Tap / button）
 app.post('/api/auth/google', async (req, res) => {
     try {
         const { id_token } = req.body || {};
-        if (!id_token) return res.status(400).json({ success:false, error:'缺少 id_token' });
+        if (!id_token) return res.status(400).json({ success: false, error: '缺少 id_token' });
+        if (!GOOGLE_CLIENT_ID) return res.status(500).json({ success: false, error: 'Google OAuth 未設定' });
+
         const ticket = await googleClient.verifyIdToken({ idToken: id_token, audience: GOOGLE_CLIENT_ID });
         const payload = ticket.getPayload();
-        const email = payload.email;
-        const name = payload.name || payload.given_name || 'Google 使用者';
+        console.log(`[OAuth/Google id_token] email=${payload.email} sub=${payload.sub}`);
 
-        loadDatabase();
-        let user = (database.staff_accounts || []).find(u => u.email === email);
-        if (!user) {
-            // 首次登入自動註冊為一般用戶
-            const id = database.staff_accounts.length ? Math.max(...database.staff_accounts.map(u => u.id)) + 1 : 1;
-            user = { id, username: email, password: await bcrypt.hash(uuidv4(), 10), name, role:'user', email, plan:'free', created_at: new Date().toISOString() };
-            database.staff_accounts.push(user);
-            saveDatabase();
-        }
-        const token = jwt.sign(
-            { id: user.id, username: user.username, name: user.name, role: user.role },
-            JWT_SECRET,
-            { expiresIn: JWT_EXPIRES_IN }
-        );
-        return res.json({ success:true, token, user: { id:user.id, name:user.name, email:user.email, role:user.role, plan:user.plan } });
+        const user = await findOrCreateOAuthAccount({
+            provider: 'google',
+            providerId: payload.sub,
+            email: payload.email,
+            name: payload.name || payload.given_name || 'Google 使用者',
+            avatarUrl: payload.picture
+        });
+
+        const token = issueJwtForUser(user);
+        return res.json({ success: true, token, user: { id: user.id, name: user.name, email: user.email, role: user.role, plan: user.plan } });
     } catch (e) {
-        console.error('Google 登入失敗', e.message);
-        return res.status(401).json({ success:false, error:'Google 登入驗證失敗' });
+        console.error('[OAuth/Google id_token] 失敗:', e.message);
+        return res.status(401).json({ success: false, error: 'Google 登入驗證失敗' });
+    }
+});
+
+// 2. Google OAuth redirect flow（給不支援 popup 的環境）
+app.get('/api/auth/google/start', (req, res) => {
+    if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+        return res.status(503).send('Google OAuth 未設定（缺少 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET）');
+    }
+    const state = generateOAuthState('google');
+    const redirect_uri = `${OAUTH_CALLBACK_BASE}/api/auth/google/callback`;
+    const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    url.searchParams.set('client_id', GOOGLE_CLIENT_ID);
+    url.searchParams.set('redirect_uri', redirect_uri);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', 'openid email profile');
+    url.searchParams.set('state', state);
+    url.searchParams.set('access_type', 'offline');
+    url.searchParams.set('prompt', 'select_account');
+    console.log(`[OAuth/Google start] state=${state} redirect_uri=${redirect_uri}`);
+    return res.redirect(url.toString());
+});
+
+app.get('/api/auth/google/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+    if (error) return oauthFailRedirect(res, 'google', error);
+    if (!consumeOAuthState(state)) return oauthFailRedirect(res, 'google', 'invalid_state');
+    if (!code) return oauthFailRedirect(res, 'google', 'missing_code');
+
+    try {
+        const redirect_uri = `${OAUTH_CALLBACK_BASE}/api/auth/google/callback`;
+        const oauthClient = new OAuth2Client(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, redirect_uri);
+        const { tokens } = await oauthClient.getToken(code);
+        const ticket = await oauthClient.verifyIdToken({ idToken: tokens.id_token, audience: GOOGLE_CLIENT_ID });
+        const payload = ticket.getPayload();
+        console.log(`[OAuth/Google callback] email=${payload.email} sub=${payload.sub}`);
+
+        const user = await findOrCreateOAuthAccount({
+            provider: 'google',
+            providerId: payload.sub,
+            email: payload.email,
+            name: payload.name || payload.given_name || 'Google 使用者',
+            avatarUrl: payload.picture
+        });
+        return oauthSuccessRedirect(res, issueJwtForUser(user), 'google');
+    } catch (e) {
+        console.error('[OAuth/Google callback] 失敗:', e.message);
+        return oauthFailRedirect(res, 'google', 'token_exchange_failed');
     }
 });
 
 // 取得前端用的 Google Client ID（公開資訊）
 app.get('/api/auth/google/client-id', (req, res) => {
     return res.json({ success: !!GOOGLE_CLIENT_ID, client_id: GOOGLE_CLIENT_ID || null });
+});
+
+// ─── LINE Login OAuth ─────────────────────────────────────────
+app.get('/api/auth/line/start', (req, res) => {
+    if (!LINE_LOGIN_CHANNEL_ID) {
+        return res.status(503).send('LINE Login 未設定（缺少 LINE_LOGIN_CHANNEL_ID）');
+    }
+    const state = generateOAuthState('line');
+    const redirect_uri = `${OAUTH_CALLBACK_BASE}/api/auth/line/callback`;
+    const url = new URL('https://access.line.me/oauth2/v2.1/authorize');
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', LINE_LOGIN_CHANNEL_ID);
+    url.searchParams.set('redirect_uri', redirect_uri);
+    url.searchParams.set('state', state);
+    url.searchParams.set('scope', 'profile openid email');
+    console.log(`[OAuth/LINE start] state=${state} redirect_uri=${redirect_uri}`);
+    return res.redirect(url.toString());
+});
+
+app.get('/api/auth/line/callback', async (req, res) => {
+    const { code, state, error } = req.query;
+    if (error) return oauthFailRedirect(res, 'line', error);
+    if (!consumeOAuthState(state)) return oauthFailRedirect(res, 'line', 'invalid_state');
+    if (!code) return oauthFailRedirect(res, 'line', 'missing_code');
+
+    try {
+        const redirect_uri = `${OAUTH_CALLBACK_BASE}/api/auth/line/callback`;
+
+        // 1. 交換 code → access_token + id_token
+        const tokenResp = await axios.post('https://api.line.me/oauth2/v2.1/token',
+            new URLSearchParams({
+                grant_type: 'authorization_code',
+                code,
+                redirect_uri,
+                client_id: LINE_LOGIN_CHANNEL_ID,
+                client_secret: LINE_LOGIN_CHANNEL_SECRET
+            }).toString(),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+        const { access_token, id_token: lineIdToken } = tokenResp.data;
+        console.log(`[OAuth/LINE callback] got access_token, verifying id_token`);
+
+        // 2. 驗證 id_token 拿 userId + email
+        const verifyResp = await axios.post('https://api.line.me/oauth2/v2.1/verify',
+            new URLSearchParams({ id_token: lineIdToken, client_id: LINE_LOGIN_CHANNEL_ID }).toString(),
+            { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+        const idPayload = verifyResp.data;
+        const lineUserId = idPayload.sub;
+        const email = idPayload.email || '';
+        const name = idPayload.name || 'LINE 使用者';
+        const picture = idPayload.picture || '';
+        console.log(`[OAuth/LINE callback] lineUserId=${lineUserId} email=${email} name=${name}`);
+
+        const user = await findOrCreateOAuthAccount({
+            provider: 'line',
+            providerId: lineUserId,
+            email,
+            name,
+            avatarUrl: picture
+        });
+        return oauthSuccessRedirect(res, issueJwtForUser(user), 'line');
+    } catch (e) {
+        const detail = e.response?.data ? JSON.stringify(e.response.data) : e.message;
+        console.error('[OAuth/LINE callback] 失敗:', detail);
+        return oauthFailRedirect(res, 'line', 'token_exchange_failed');
+    }
+});
+
+// LINE Login 設定狀態（前端查詢是否啟用）
+app.get('/api/auth/line/status', (req, res) => {
+    return res.json({ enabled: !!LINE_LOGIN_CHANNEL_ID, channelId: LINE_LOGIN_CHANNEL_ID || null });
 });
 
 // 環境檢查（郵件設定用）
@@ -1261,7 +1497,8 @@ const loadDatabase = () => {
                 password_reset_requests: loadedData.password_reset_requests || [],
                 password_change_requests: loadedData.password_change_requests || [],
                 line_api_settings: loadedData.line_api_settings || [],
-                line_bots: loadedData.line_bots || []
+                line_bots: loadedData.line_bots || [],
+                oauth_accounts: loadedData.oauth_accounts || []
             };
         }
     } catch (error) {
