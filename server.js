@@ -2951,8 +2951,11 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
         const date = new Date();
         const pad2 = (n) => n.toString().padStart(2, '0');
         const tradeDate = `${date.getFullYear()}/${pad2(date.getMonth()+1)}/${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
-        const { type = 'plan', amount = 2990, tokens = 0 } = req.body || {};
-        const totalAmount = Math.max(parseInt(amount, 10) || 0, 0);
+        // 方案訂閱固定 NT$990，Token 儲值由前端傳入金額
+        const { type = 'plan', tokens = 0 } = req.body || {};
+        const PLAN_PRICE = 990; // NT$990 / 月，統一定價
+        const rawAmount = parseInt(req.body?.amount, 10) || 0;
+        const totalAmount = type === 'plan' ? PLAN_PRICE : Math.max(rawAmount, 0);
 
         // 參數檢查：金額與儲值數量
         if (totalAmount <= 0) {
@@ -2967,8 +2970,8 @@ app.post('/api/upgrade', authenticateJWT, (req, res) => {
             MerchantTradeDate: tradeDate,
             PaymentType: 'aio',
             TotalAmount: totalAmount,
-            TradeDesc: type === 'topup' ? `EchoChat Token 儲值 ${tokens}` : 'EchoChat Premium 升級',
-            ItemName: type === 'topup' ? `Token 儲值 (${tokens}) x1` : 'EchoChat 尊榮版 x1',
+            TradeDesc: type === 'topup' ? `EchoChat Token 儲值 ${tokens}` : 'EchoChat 方案訂閱（NT$990/月）',
+            ItemName: type === 'topup' ? `Token 儲值 (${tokens}) x1` : 'EchoChat 月訂閱方案 x1',
             ReturnURL: ECPAY_RETURN_URL,
             OrderResultURL: ECPAY_ORDER_RESULT_URL,
             ClientBackURL: ECPAY_CLIENT_BACK_URL,
