@@ -4478,10 +4478,35 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
 
         let removedConversations = 0;
         if (String(deletedChannel.platform || '').toLowerCase() === 'line') {
-            const { removed } = purgeLineChatHistoryForUser(req.staff.id, null);
+            // 解密 Token → 比對 line_api_settings → 取得 LINE OA channel_id
+            const decryptedToken = decryptSensitive(deletedChannel.apiKeyEnc) || '';
+            let lineOaCid = null;
+            if (decryptedToken) {
+                const matchSetting = (database.line_api_settings || []).find((r) => {
+                    if (String(r.user_id) !== String(req.staff.id)) return false;
+                    const plain = r.channel_access_token_plain || '';
+                    const dec = decryptSensitive(r.channel_access_token) || '';
+                    return (plain && plain === decryptedToken) || (dec && dec === decryptedToken);
+                });
+                lineOaCid = matchSetting?.channel_id || null;
+            }
+
+            // 刪完後是否還有其他 LINE 設定（同一 user）
+            const hasOtherLineSettings = (database.line_api_settings || []).some(
+                (r) => String(r.user_id) === String(req.staff.id) &&
+                       String(r.channel_id || '') !== String(lineOaCid || '')
+            );
+
+            // 若能定位到特定 channel_id → 只刪該頻道的對話
+            // includeNoChannelId = true：順帶清掉 channelId 為空的孤兒對話（但只在沒有其他 LINE 設定時才清）
+            const { removed } = purgeLineChatHistoryForUser(
+                req.staff.id,
+                lineOaCid,
+                !hasOtherLineSettings   // 沒有其他 LINE 頻道時一起清孤兒
+            );
             removedConversations = removed;
             clearLineIntegrationRuntimeCache(req.staff.id);
-            console.log(`🧹 已一併移除 LINE 對話紀錄 ${removed} 筆（使用者 ${req.staff.id}）`);
+            console.log(`🧹 已一併移除 LINE 對話紀錄 ${removed} 筆（channelId: ${lineOaCid || '(unknown)'}，使用者 ${req.staff.id}）`);
         }
 
         saveDatabase();
@@ -5185,10 +5210,11 @@ function conversationBelongsToEchochatUser(conv, echochatUserId) {
 /**
  * 刪除 EchoChat 使用者在後端儲存的 LINE 對話（chat_history）。
  * @param {number|string} echochatUserId
- * @param {string|null|undefined} lineOaChannelId - LINE OA destination（channel_id）；未指定時刪除該使用者所有 LINE 對話
+ * @param {string|null|undefined} lineOaChannelId  - LINE OA channel_id；null 代表刪除所有 LINE 對話
+ * @param {boolean}              includeNoChannelId - 當 lineOaChannelId 有值時，是否一起刪除 channelId 為空的對話
  * @returns {{ removed: number }}
  */
-function purgeLineChatHistoryForUser(echochatUserId, lineOaChannelId) {
+function purgeLineChatHistoryForUser(echochatUserId, lineOaChannelId, includeNoChannelId = false) {
     loadDatabase();
     if (!database.chat_history || !database.chat_history.length) {
         return { removed: 0 };
@@ -5202,7 +5228,8 @@ function purgeLineChatHistoryForUser(echochatUserId, lineOaChannelId) {
         if (!conversationBelongsToEchochatUser(conv, uid)) return true;
         if (!isLineLikeConversation(conv)) return true;
         if (filterChannel) {
-            if (String(conv.channelId || '') === targetCid) {
+            const cid = String(conv.channelId || '').trim();
+            if (cid === targetCid || (includeNoChannelId && cid === '')) {
                 removed += 1;
                 return false;
             }
