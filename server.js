@@ -19,6 +19,11 @@ const crypto = require('crypto');
 const cors = require('cors');
 require('dotenv').config();
 
+const resolvedOpenAIModel = () =>
+    (process.env.OPENAI_MODEL || process.env.PUBLIC_CHAT_MODEL || 'gpt-5.3').trim();
+
+console.log('目前模型：', resolvedOpenAIModel());
+
 // ─── Email / SMTP 設定 ─────────────────────────────────────────
 // ⚠️  寄件者固定為 EchoChat <contact@echochat.com.tw>
 //     SMTP 認證帳號（EMAIL_USER）可以不同，但 mail server 必須允許代送此地址
@@ -369,7 +374,7 @@ function estimateChatTokens(message, knowledgeContext, replyMax = 600) {
 
 // OpenAI 回覆請求（支援 gpt-5 系列使用 responses API）
 function isGpt5Model(modelName) {
-    return /^gpt-5(\.|$)/i.test(modelName || '');
+    return String(modelName || '').toLowerCase().startsWith('gpt-5');
 }
 
 function extractOpenAIText(payload) {
@@ -430,7 +435,8 @@ function sanitizeMessagesForOpenAI(rawMessages) {
         .filter(Boolean);
 }
 
-async function requestOpenAIReply({ model, messages, maxTokens, temperature, topP }) {
+async function requestOpenAIReply({ model: _modelIgnored, messages, maxTokens, temperature, topP }) {
+    const model = resolvedOpenAIModel();
     const headers = {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
         'Content-Type': 'application/json'
@@ -1173,7 +1179,7 @@ function getUserAIConfig(userId) {
     loadDatabase();
     const fallback = {
         assistant_name: 'AI 助理',
-        llm: 'gpt-4o-mini',
+        llm: 'gpt-5.3',
         use_case: 'customer-service',
         description: '我是您的智能客服助理，很高興為您服務！'
     };
@@ -1185,8 +1191,8 @@ function getUserAIConfig(userId) {
 // 取得使用者 AI 設定（預設模型/升級模型/自動升級）
 function getDefaultAISettings() {
     return {
-        default_model: 'gpt-5.0',
-        fallback_model: 'gpt-4.1',
+        default_model: 'gpt-5.3',
+        fallback_model: 'gpt-5.3',
         auto_escalate_enabled: true,
         escalate_keywords: ['退款', '合約', '發票', '抱怨', '故障'],
         updated_at: new Date().toISOString()
@@ -1351,7 +1357,7 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
     messages.push(...recentHistory);
 
     const historyTokenEstimate = Math.ceil(historyCharCount / 3);
-    console.log(`[AI generateHistory] userId=${userId} historyCount=${recentHistory.length} historyChars=${historyCharCount} historyTokenEstimate=${historyTokenEstimate} model=${aiConfig.llm}`);
+    console.log(`[AI generateHistory] userId=${userId} historyCount=${recentHistory.length} historyChars=${historyCharCount} historyTokenEstimate=${historyTokenEstimate} model=${resolvedOpenAIModel()}`);
 
     const plan = user?.plan || 'free';
     const planAllowance = getPlanAllowance(plan, user);
@@ -1365,7 +1371,7 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
     if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
 
     const aiReply = await requestOpenAIReply({
-        model: aiConfig.llm || 'gpt-3.5-turbo',
+        model: resolvedOpenAIModel(),
         messages,
         maxTokens: 800,
         temperature: 0.6
@@ -1380,7 +1386,7 @@ async function generateAIReplyWithHistory(userId, messageHistory, currentMessage
     user.conversation_used_in_cycle = (user.conversation_used_in_cycle || 0) + 1;
     saveDatabase();
 
-    return { reply: aiReply, model: aiConfig.llm, assistantName: aiConfig.assistant_name };
+    return { reply: aiReply, model: resolvedOpenAIModel(), assistantName: aiConfig.assistant_name };
 }
 
 // 以使用者知識庫產生 AI 回覆並扣點
@@ -1432,7 +1438,7 @@ async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
     if (availableThisCycle < estimatedTokens) throw new Error('餘額不足');
 
     const aiReply = await requestOpenAIReply({
-        model: aiConfig.llm || 'gpt-3.5-turbo',
+        model: resolvedOpenAIModel(),
         messages,
         maxTokens: 800,
         temperature: 0.6
@@ -1447,7 +1453,7 @@ async function generateAIReplyForUser(userId, message, knowledgeOnly = false) {
     user.conversation_used_in_cycle = (user.conversation_used_in_cycle || 0) + 1;
     saveDatabase();
 
-    return { reply: aiReply, model: aiConfig.llm, assistantName: aiConfig.assistant_name };
+    return { reply: aiReply, model: resolvedOpenAIModel(), assistantName: aiConfig.assistant_name };
 }
 
 // JWT 身份驗證中間件
@@ -3669,7 +3675,7 @@ app.get('/api/ai-assistant-config', authenticateJWT, (req, res) => {
         const found = database.ai_assistant_configs.find(c => c.user_id === userId);
         const defaultConfig = {
             assistant_name: 'AI 助理',
-            llm: 'gpt-4o-mini',
+            llm: 'gpt-5.3',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
             industry: 'general',
@@ -3722,6 +3728,7 @@ app.post('/api/ai-assistant-config', authenticateJWT, (req, res) => {
             features: Array.isArray(features) ? features.filter(f => typeof f === 'string') : [],
             updated_at: new Date().toISOString()
         };
+        config.llm = resolvedOpenAIModel();
         
         loadDatabase();
         if (!Array.isArray(database.ai_assistant_configs)) {
@@ -3770,7 +3777,7 @@ app.post('/api/ai-assistant-config/reset', authenticateJWT, (req, res) => {
     try {
         const defaultConfig = {
             assistant_name: 'AI 助理',
-            llm: 'gpt-4o-mini',
+            llm: 'gpt-5.3',
             use_case: 'customer-service',
             description: '我是您的智能客服助理，很高興為您服務！',
             industry: 'general',
@@ -3952,28 +3959,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         // 獲取 AI 助理配置（每帳號）
         const aiConfig = getUserAIConfig(req.staff.id);
 
-        // 確保模型名稱有效
-        const modelName = aiConfig.llm || 'gpt-3.5-turbo';
-        
-        // 驗證模型名稱
-        const validModels = [
-            'gpt-5.2',
-            'gpt-5.1',
-            'gpt-5.0',
-            'gpt-4.1',
-            'gpt-4.1-mini',
-            'gpt-4.1-nano',
-            'gpt-4o',
-            'gpt-4o-mini',
-            'gpt-4-turbo',
-            'gpt-4',
-            'gpt-3.5-turbo',
-            'gpt-3.5-turbo-16k'
-        ];
-        if (!validModels.includes(modelName)) {
-            console.warn(`無效的模型名稱: ${modelName}，使用預設值 gpt-3.5-turbo`);
-            aiConfig.llm = 'gpt-3.5-turbo';
-        }
+        const modelName = resolvedOpenAIModel();
 
         // 構建系統提示詞
         const systemPrompt = `你是 ${aiConfig.assistant_name}，${aiConfig.description}。你的使用場景是：${aiConfig.use_case}。請根據用戶的問題提供專業、友善且有用的回應。`;
@@ -4030,7 +4016,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
                 success: true,
                 reply: '抱歉，知識庫目前沒有相關資料。請先在知識庫新增或匯入相關內容後再試。',
                 conversationId: conversationId || `conv_${Date.now()}`,
-                model: aiConfig.llm,
+                model: modelName,
                 assistantName: aiConfig.assistant_name
             });
         }
@@ -4042,7 +4028,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             { role: 'user', content: message }
         ];
 
-        console.log('使用的模型:', aiConfig.llm || 'gpt-3.5-turbo');
+        console.log('使用的模型:', modelName);
         
         // 計算本次大致 token 需求，若不足則嘗試使用儲值 token
         const user = getUserById(req.staff.id);
@@ -4067,7 +4053,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
         
         // 調用 OpenAI API
         const aiReply = await requestOpenAIReply({
-            model: aiConfig.llm || 'gpt-3.5-turbo',
+            model: modelName,
             messages,
             maxTokens: 1000,
             temperature: 0.7
@@ -4079,7 +4065,7 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
                 success: true,
                 reply: aiReply,
                 conversationId: conversationId || null,
-                model: aiConfig.llm,
+                model: modelName,
                 assistantName: aiConfig.assistant_name
             });
         }
@@ -4145,13 +4131,13 @@ app.post('/api/chat', authenticateJWT, async (req, res) => {
             success: true,
             reply: aiReply,
             conversationId: conversation.id,
-            model: aiConfig.llm,
+            model: modelName,
             assistantName: aiConfig.assistant_name
         });
 
     } catch (error) {
         // 分類錯誤碼（供前端追蹤）
-        const httpStatus = error.response?.status;
+        const httpStatus = error.response?.status ?? error.status;
         const openaiErrorMsg = error.response?.data?.error?.message || '';
         const errMsg = error.message || '';
 
@@ -4250,7 +4236,7 @@ app.post('/api/public-chat', async (req, res) => {
         ];
 
         const aiReply = await requestOpenAIReply({
-            model: process.env.PUBLIC_CHAT_MODEL || 'gpt-4o-mini',
+            model: resolvedOpenAIModel(),
             messages: chatMessages,
             maxTokens: 600,
             temperature: 0.2,
@@ -4304,88 +4290,11 @@ app.get('/api/health', (req, res) => {
 app.get('/api/ai-models', (req, res) => {
     try {
         const models = {
-            'gpt-5.2': {
-                name: 'GPT-5.2',
-                description: '最新旗艦模型，適合最高品質與高準確度場景',
-                features: ['最高準確度', '強推理能力', '多語言支援', '適合複雜任務'],
-                pricing: '頂級',
-                speed: '中等'
-            },
-            'gpt-5.1': {
-                name: 'GPT-5.1',
-                description: '高品質旗艦模型，適合關鍵任務與專業場景',
-                features: ['高準確度', '穩定回覆', '多語言支援', '適合專業任務'],
-                pricing: '高階',
-                speed: '中等'
-            },
-            'gpt-5.0': {
-                name: 'GPT-5.0',
-                description: '新一代高品質模型，兼顧品質與效率',
-                features: ['高品質回覆', '多語言支援', '通用能力強'],
-                pricing: '高階',
-                speed: '中等'
-            },
-            'gpt-4.1': {
-                name: 'GPT-4.1',
-                description: '最新旗艦模型，適合高品質與高準確度場景',
-                features: ['高準確度', '強推理能力', '多語言支援', '適合複雜任務'],
-                pricing: '高階',
-                speed: '中等'
-            },
-            'gpt-4.1-mini': {
-                name: 'GPT-4.1 Mini',
-                description: '高效能與成本平衡的新版模型，適合主流客服需求',
-                features: ['高性價比', '穩定回覆', '多語言支援', '適合日常對話'],
-                pricing: '中等',
-                speed: '快速'
-            },
-            'gpt-4.1-nano': {
-                name: 'GPT-4.1 Nano',
-                description: '輕量快速的新模型，適合大量即時回覆',
-                features: ['極速回應', '成本最低', '多語言支援'],
-                pricing: '經濟實惠',
-                speed: '極速'
-            },
-            'gpt-4o': {
-                name: 'GPT-4o',
-                description: '高品質通用模型，適合需要更佳理解力的場景',
-                features: ['高品質回覆', '多語言支援', '通用能力強'],
-                pricing: '高階',
-                speed: '中等'
-            },
-            'gpt-4o-mini': {
-                name: 'GPT-4o Mini',
-                description: '快速且經濟實惠的對話體驗，適合一般客服需求',
-                features: ['快速回應', '成本效益高', '支援多語言', '適合日常對話'],
-                pricing: '經濟實惠',
-                speed: '快速'
-            },
-            'gpt-4': {
-                name: 'GPT-4',
-                description: '經典高品質模型，適合複雜任務與專業場景',
-                features: ['高品質回覆', '強推理能力', '適合複雜任務'],
-                pricing: '高階',
-                speed: '中等'
-            },
-            'gpt-4-turbo': {
-                name: 'GPT-4 Turbo',
-                description: '高級模型，適合較複雜的任務與內容生成',
-                features: ['強推理能力', '高準確度', '適合複雜任務'],
-                pricing: '高階',
-                speed: '中等'
-            },
-            'gpt-3.5-turbo': {
-                name: 'GPT-3.5 Turbo',
-                description: '經典入門模型，速度快且成本較低',
-                features: ['快速回應', '成本效益高', '穩定可靠'],
-                pricing: '經濟實惠',
-                speed: '快速'
-            },
-            'gpt-3.5-turbo-16k': {
-                name: 'GPT-3.5 Turbo 16K',
-                description: '支援更長上下文的 3.5 版本',
-                features: ['較長上下文', '成本較低', '穩定可靠'],
-                pricing: '經濟實惠',
+            'gpt-5.3': {
+                name: 'GPT-5.3',
+                description: '專案統一使用之對話模型，適合客服與專業回覆',
+                features: ['高準確度', '自然語氣', '多語言支援', '複雜問題理解'],
+                pricing: '依用量計費',
                 speed: '快速'
             }
         };
