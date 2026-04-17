@@ -4475,13 +4475,23 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
         
         const deletedChannel = database.channels[channelIndex];
         database.channels.splice(channelIndex, 1);
+
+        let removedConversations = 0;
+        if (String(deletedChannel.platform || '').toLowerCase() === 'line') {
+            const { removed } = purgeLineChatHistoryForUser(req.staff.id, null);
+            removedConversations = removed;
+            clearLineIntegrationRuntimeCache(req.staff.id);
+            console.log(`🧹 已一併移除 LINE 對話紀錄 ${removed} 筆（使用者 ${req.staff.id}）`);
+        }
+
         saveDatabase();
         
         console.log('✅ 頻道刪除成功:', deletedChannel.name);
         
         res.json({
             success: true,
-            message: '頻道刪除成功'
+            message: '頻道刪除成功',
+            removedLineConversations: removedConversations
         });
         
     } catch (error) {
@@ -5158,6 +5168,62 @@ let lineAPISettings = {}; // 仍保留快取，但以 database.line_api_settings
 const lineDestinationCache = new Map();
 const debugEvents = [];
 
+function isLineLikeConversation(conv) {
+    if (!conv) return false;
+    const ch = String(conv.channel || conv.platform || '').toLowerCase();
+    return ch === 'line' || ch === 'line_bot';
+}
+
+function conversationBelongsToEchochatUser(conv, echochatUserId) {
+    if (!conv) return false;
+    const uid = String(echochatUserId);
+    if (conv.userId != null && String(conv.userId) === uid) return true;
+    const id = String(conv.id || '');
+    return id.startsWith(`line_${uid}_`);
+}
+
+/**
+ * 刪除 EchoChat 使用者在後端儲存的 LINE 對話（chat_history）。
+ * @param {number|string} echochatUserId
+ * @param {string|null|undefined} lineOaChannelId - LINE OA destination（channel_id）；未指定時刪除該使用者所有 LINE 對話
+ * @returns {{ removed: number }}
+ */
+function purgeLineChatHistoryForUser(echochatUserId, lineOaChannelId) {
+    loadDatabase();
+    if (!database.chat_history || !database.chat_history.length) {
+        return { removed: 0 };
+    }
+    const uid = String(echochatUserId);
+    const filterChannel = lineOaChannelId != null && String(lineOaChannelId).trim() !== '';
+    const targetCid = filterChannel ? String(lineOaChannelId).trim() : '';
+
+    let removed = 0;
+    database.chat_history = database.chat_history.filter((conv) => {
+        if (!conversationBelongsToEchochatUser(conv, uid)) return true;
+        if (!isLineLikeConversation(conv)) return true;
+        if (filterChannel) {
+            if (String(conv.channelId || '') === targetCid) {
+                removed += 1;
+                return false;
+            }
+            return true;
+        }
+        removed += 1;
+        return false;
+    });
+    return { removed };
+}
+
+function clearLineIntegrationRuntimeCache(echochatUserId) {
+    const prefix = `${String(echochatUserId)}:`;
+    Object.keys(lineAPISettings).forEach((k) => {
+        if (k.startsWith(prefix)) delete lineAPISettings[k];
+    });
+    for (const key of [...lineDestinationCache.keys()]) {
+        if (String(key).startsWith(prefix)) lineDestinationCache.delete(key);
+    }
+}
+
 /**
  * 驗證 LINE userId 格式是否合法。
  * 真實 LINE userId 格式：U + 32 hex 字元（不區分大小寫）。
@@ -5428,7 +5494,8 @@ app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
                 channelAccessToken: decryptedToken ? 'Configured' : '',
                 channelSecret: decryptedSecret ? 'Configured' : '',
                 webhookUrl: record?.webhook_url || '',
-                isActive: record?.isActive !== false // 預設為啟用
+                isActive: record?.isActive !== false, // 預設為啟用
+                oaChannelId: record?.channel_id || null
             }
         });
     } catch (error) {
@@ -5571,6 +5638,76 @@ app.put('/api/line-api/settings/toggle', authenticateJWT, async (req, res) => {
         res.status(500).json({
             success: false,
             error: '切換啟用狀態失敗'
+        });
+    }
+});
+
+// 移除 LINE API 設定並刪除對應對話紀錄（可選 ?channelId= 僅刪除單一 OA）
+app.delete('/api/line-api/settings', authenticateJWT, async (req, res) => {
+    try {
+        const userId = req.staff.id;
+        const qChannel = req.query.channelId != null ? String(req.query.channelId).trim() : '';
+
+        loadDatabase();
+        if (!database.line_api_settings) database.line_api_settings = [];
+
+        const mine = database.line_api_settings.filter((r) => String(r.user_id) === String(userId));
+        if (!mine.length) {
+            return res.status(404).json({
+                success: false,
+                error: '找不到 LINE API 設定'
+            });
+        }
+
+        let removedSettings = 0;
+        if (qChannel) {
+            database.line_api_settings = database.line_api_settings.filter((r) => {
+                if (String(r.user_id) !== String(userId)) return true;
+                if (String(r.channel_id || '') !== qChannel) return true;
+                removedSettings += 1;
+                return false;
+            });
+            if (removedSettings === 0) {
+                return res.status(404).json({
+                    success: false,
+                    error: '找不到指定的 LINE Channel 設定'
+                });
+            }
+        } else {
+            const before = database.line_api_settings.length;
+            database.line_api_settings = database.line_api_settings.filter((r) => String(r.user_id) !== String(userId));
+            removedSettings = before - database.line_api_settings.length;
+        }
+
+        let removedConversations = 0;
+        if (qChannel) {
+            const stillHasLine = (database.line_api_settings || []).some((r) => String(r.user_id) === String(userId));
+            if (!stillHasLine) {
+                removedConversations = purgeLineChatHistoryForUser(userId, null).removed;
+            } else {
+                removedConversations = purgeLineChatHistoryForUser(userId, qChannel).removed;
+            }
+        } else {
+            removedConversations = purgeLineChatHistoryForUser(userId, null).removed;
+        }
+
+        clearLineIntegrationRuntimeCache(userId);
+
+        saveDatabase();
+
+        console.log(`✅ 已移除 LINE 設定（${removedSettings} 筆）並刪除對話 ${removedConversations} 筆，使用者 ${userId}`);
+
+        return res.json({
+            success: true,
+            message: qChannel ? '已移除指定的 LINE 頻道設定與相關對話' : '已移除 LINE 設定與所有 LINE 對話紀錄',
+            removedSettings,
+            removedLineConversations: removedConversations
+        });
+    } catch (error) {
+        console.error('刪除 LINE API 設定錯誤:', error);
+        return res.status(500).json({
+            success: false,
+            error: '刪除 LINE 設定失敗'
         });
     }
 });
