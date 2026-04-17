@@ -3166,6 +3166,7 @@ app.get('/api/conversations', authenticateJWT, async (req, res) => {
         loadDatabase();
         const userId = req.staff.id;
         const requestedChannel = String(req.query.channel || '').trim().toLowerCase();
+        const requestedChannelId = String(req.query.channelId || '').trim();
 
         // 過濾屬於該使用者的對話（依 userId 或 id 前綴）
         const belongsToUser = (conv) => {
@@ -3192,6 +3193,9 @@ app.get('/api/conversations', authenticateJWT, async (req, res) => {
                 // 只保留有合法 LINE userId 的 LINE 對話；沒有 customerLineId 或格式非法的一律排除
                 const effectiveChannel = String(c.channel || c.platform || '').toLowerCase();
                 if ((effectiveChannel === 'line' || platform === 'line' || platform === 'line_bot') && !isValidLineUserId(c.customerLineId)) {
+                    return false;
+                }
+                if (requestedChannelId && String(c.channelId || '').trim() !== requestedChannelId) {
                     return false;
                 }
                 if (!requestedChannel) return true;
@@ -3270,9 +3274,11 @@ app.get('/api/conversations/:conversationId', authenticateJWT, async (req, res) 
         loadDatabase();
         const userId = req.staff.id;
         const { conversationId } = req.params;
+        const requestedChannelId = String(req.query.channelId || '').trim();
         const conv = (database.chat_history || []).find(c => {
             if (!c) return false;
             if (c.id !== conversationId) return false;
+            if (requestedChannelId && String(c.channelId || '').trim() !== requestedChannelId) return false;
             // 確認該對話屬於當前使用者
             if (c.userId && String(c.userId) === String(userId)) return true;
             const id = String(c.id || '');
@@ -4477,6 +4483,8 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
         database.channels.splice(channelIndex, 1);
 
         let removedConversations = 0;
+        let removedMessages = 0;
+        let removedProfiles = 0;
         if (String(deletedChannel.platform || '').toLowerCase() === 'line') {
             // 解密 Token → 比對 line_api_settings → 取得 LINE OA channel_id
             const decryptedToken = decryptSensitive(deletedChannel.apiKeyEnc) || '';
@@ -4490,6 +4498,13 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
                 });
                 lineOaCid = matchSetting?.channel_id || null;
             }
+
+            const targetConversations = (database.chat_history || []).filter((conv) => {
+                if (!conversationBelongsToEchochatUser(conv, req.staff.id)) return false;
+                if (!isLineLikeConversation(conv)) return false;
+                return String(conv.channelId || '').trim() === String(lineOaCid || '').trim();
+            });
+            removedMessages = targetConversations.reduce((sum, conv) => sum + ((conv.messages || []).length), 0);
 
             // 刪完後是否還有其他 LINE 設定（同一 user）
             const hasOtherLineSettings = (database.line_api_settings || []).some(
@@ -4505,8 +4520,27 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
                 !hasOtherLineSettings   // 沒有其他 LINE 頻道時一起清孤兒
             );
             removedConversations = removed;
+
+            const beforeProfiles = (database.line_profiles || []).length;
+            database.line_profiles = (database.line_profiles || []).filter((profile) => {
+                if (String(profile.userId || '') !== String(req.staff.id)) return true;
+                if (!lineOaCid) return true;
+                return String(profile.channelId || '').trim() !== String(lineOaCid).trim();
+            });
+            removedProfiles = beforeProfiles - database.line_profiles.length;
+
+            if (lineOaCid) {
+                database.line_api_settings = (database.line_api_settings || []).filter((setting) => {
+                    if (String(setting.user_id) !== String(req.staff.id)) return true;
+                    return String(setting.channel_id || '').trim() !== String(lineOaCid).trim();
+                });
+            }
+
             clearLineIntegrationRuntimeCache(req.staff.id);
-            console.log(`🧹 已一併移除 LINE 對話紀錄 ${removed} 筆（channelId: ${lineOaCid || '(unknown)'}，使用者 ${req.staff.id}）`);
+            console.log(`[CHANNEL_DELETE] accountId=${req.staff.id} channelId=${lineOaCid || '(unknown)'} platform=line`);
+            console.log(`[CHANNEL_DELETE] conversations_deleted=${removedConversations}`);
+            console.log(`[CHANNEL_DELETE] messages_deleted=${removedMessages}`);
+            console.log(`[CHANNEL_DELETE] profiles_deleted=${removedProfiles}`);
         }
 
         saveDatabase();
@@ -4516,7 +4550,9 @@ app.delete('/api/channels/:id', authenticateJWT, (req, res) => {
         res.json({
             success: true,
             message: '頻道刪除成功',
-            removedLineConversations: removedConversations
+            removedLineConversations: removedConversations,
+            removedMessages,
+            removedProfiles
         });
         
     } catch (error) {
@@ -5358,8 +5394,18 @@ async function getLineProfile(lineUserId, channelAccessToken) {
 function upsertLineProfile(profile) {
     if (!profile?.lineUserId) return null;
     if (!Array.isArray(database.line_profiles)) database.line_profiles = [];
-    const idx = database.line_profiles.findIndex((p) => String(p.lineUserId) === String(profile.lineUserId));
+    const targetUserId = profile.userId != null ? String(profile.userId) : '';
+    const targetChannelId = String(profile.channelId || '').trim();
+    const idx = database.line_profiles.findIndex((p) => {
+        if (String(p.lineUserId) !== String(profile.lineUserId)) return false;
+        if (targetUserId && String(p.userId || '') !== targetUserId) return false;
+        if (targetChannelId && String(p.channelId || '').trim() !== targetChannelId) return false;
+        if (targetUserId || targetChannelId) return true;
+        return !p.userId && !p.channelId;
+    });
     const record = {
+        userId: profile.userId != null ? Number(profile.userId) : null,
+        channelId: targetChannelId || null,
         lineUserId: String(profile.lineUserId),
         displayName: profile.displayName || 'LINE 使用者',
         pictureUrl: profile.pictureUrl || null,
@@ -5376,9 +5422,17 @@ function upsertLineProfile(profile) {
     return record;
 }
 
-function getLineProfileFromStore(lineUserId) {
+function getLineProfileFromStore(lineUserId, userId = null, channelId = null) {
     if (!lineUserId || !Array.isArray(database.line_profiles)) return null;
-    return database.line_profiles.find((p) => String(p.lineUserId) === String(lineUserId)) || null;
+    const targetUserId = userId != null ? String(userId) : '';
+    const targetChannelId = String(channelId || '').trim();
+    return database.line_profiles.find((p) => {
+        if (String(p.lineUserId) !== String(lineUserId)) return false;
+        if (targetUserId && String(p.userId || '') !== targetUserId) return false;
+        if (targetChannelId && String(p.channelId || '').trim() !== targetChannelId) return false;
+        if (targetUserId || targetChannelId) return true;
+        return true;
+    }) || null;
 }
 
 function normalizePictureUrl(value) {
@@ -5400,7 +5454,7 @@ async function backfillConversationProfileIfNeeded(conv) {
         if (!isStale) return false; // 未過期，不重抓
     }
     // 先嘗試從 line_profiles store 取（只有 profile store 也是新鮮的才用）
-    const profileFromStore = getLineProfileFromStore(conv.customerLineId);
+    const profileFromStore = getLineProfileFromStore(conv.customerLineId, conv.userId, conv.channelId);
     const storeUpdatedAt = profileFromStore?.updatedAt ? Date.parse(profileFromStore.updatedAt) : 0;
     const storeIsStale = !storeUpdatedAt || (Date.now() - storeUpdatedAt > 7 * 24 * 60 * 60 * 1000);
     if (normalizePictureUrl(profileFromStore?.pictureUrl) && !storeIsStale) {
@@ -5423,7 +5477,11 @@ async function backfillConversationProfileIfNeeded(conv) {
         if (!token) return false;
         const profile = await getLineProfile(conv.customerLineId, token);
         if (!profile) return false;
-        const upserted = upsertLineProfile(profile);
+        const upserted = upsertLineProfile({
+            ...profile,
+            userId: conv.userId,
+            channelId: conv.channelId || null
+        });
         conv.customerName = upserted?.displayName || conv.customerName || 'LINE 使用者';
         conv.displayName = upserted?.displayName || conv.displayName || conv.customerName;
         conv.customerPicture = upserted?.pictureUrl || null;
@@ -5480,6 +5538,8 @@ async function maybeRefreshConversationProfile(conv) {
         conv.displayName = conv.customerName || conv.displayName || 'LINE 使用者';
         conv.pictureUrl = conv.customerPicture || conv.pictureUrl || null;
         upsertLineProfile({
+            userId: conv.userId,
+            channelId: conv.channelId || channelId || null,
             lineUserId: conv.customerLineId,
             displayName: conv.customerName,
             pictureUrl: conv.customerPicture,
@@ -5497,8 +5557,13 @@ async function maybeRefreshConversationProfile(conv) {
 app.get('/api/line-api/settings', authenticateJWT, async (req, res) => {
     try {
         const userId = req.staff.id;
+        const requestedChannelId = String(req.query.channelId || '').trim();
         loadDatabase();
-        const record = (database.line_api_settings || []).find(r => String(r.user_id) === String(userId));
+        const record = (database.line_api_settings || []).find((r) => {
+            if (String(r.user_id) !== String(userId)) return false;
+            if (requestedChannelId) return String(r.channel_id || '').trim() === requestedChannelId;
+            return true;
+        });
         const decryptedToken = decryptSensitive(record?.channel_access_token) || record?.channel_access_token_plain || record?.channel_access_token || '';
         const decryptedSecret = decryptSensitive(record?.channel_secret) || record?.channel_secret_plain || record?.channel_secret || '';
         // 若成功解密且尚未補明文備援，補寫回資料庫
@@ -6608,9 +6673,15 @@ async function handleLineMessage(event, userId, channelId, lineSetting) {
             if (profileFromApi) {
                 displayName = profileFromApi.displayName || displayName;
                 pictureUrl = profileFromApi.pictureUrl || pictureUrl;
-                storedLineProfile = upsertLineProfile(profileFromApi);
+                storedLineProfile = upsertLineProfile({
+                    ...profileFromApi,
+                    userId,
+                    channelId: lineSetting?.channel_id || channelId || null
+                });
             } else {
                 storedLineProfile = upsertLineProfile({
+                    userId,
+                    channelId: lineSetting?.channel_id || channelId || null,
                     lineUserId: sourceUserId,
                     displayName,
                     pictureUrl,
@@ -7260,9 +7331,15 @@ async function handleLineBotMessage(event, bot) {
             if (profileFromApi) {
                 displayName = profileFromApi.displayName || displayName;
                 pictureUrl = profileFromApi.pictureUrl || pictureUrl;
-                storedLineProfile = upsertLineProfile(profileFromApi);
+                storedLineProfile = upsertLineProfile({
+                    ...profileFromApi,
+                    userId: bot.user_id,
+                    channelId: bot.channel_id || null
+                });
             } else {
                 storedLineProfile = upsertLineProfile({
+                    userId: bot.user_id,
+                    channelId: bot.channel_id || null,
                     lineUserId: sourceUserId,
                     displayName,
                     pictureUrl,
